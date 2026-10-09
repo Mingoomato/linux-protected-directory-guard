@@ -1,0 +1,17 @@
+schema_version: policy.v1
+policy_revision: lab-001
+mode: audit
+protected_roots:
+  - /home/user/guard-lab
+default_action: allow
+rules:
+  - id: deny-lab-writes
+    scope: /home/user/guard-lab
+    operation: open_for_write
+    subject: any
+    action: deny
+  - id: allow-lab-reads
+    scope: /home/user/guard-lab
+    operation: open_for_read
+    subject: any
+    action: allow

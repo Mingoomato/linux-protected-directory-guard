@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Guard decision v1",
+  "type": "object",
+  "required": ["schema_version", "policy_revision", "operation", "source_api", "decision", "enforced", "coverage"],
+  "properties": {
+    "schema_version": {"const": "guard_decision.v1"},
+    "policy_revision": {"type": "string"},
+    "operation": {"type": "string"},
+    "source_api": {"type": "string"},
+    "decision": {"enum": ["allow", "deny", "unknown"]},
+    "enforced": {"type": "boolean"},
+    "hook_verified": {"type": "boolean"},
+    "coverage": {"enum": ["audit_only", "unsupported", "degraded"]}
+  },
+  "additionalProperties": true
+}
