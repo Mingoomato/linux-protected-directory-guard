@@ -42,6 +42,23 @@ static char *trim(char *s) {
     return s;
 }
 
+static int read_policy_line(FILE *in, char *line, size_t cap,
+                            size_t *line_length, size_t *input_bytes) {
+    *line_length = 0;
+    *input_bytes = 0;
+    int ch;
+    while ((ch = fgetc(in)) != EOF) {
+        ++*input_bytes;
+        if (ch == '\n') { line[*line_length] = '\0'; return 1; }
+        if (*line_length + 1U >= cap) { errno = EFBIG; return -1; }
+        line[(*line_length)++] = (char)ch;
+    }
+    if (ferror(in)) { errno = EIO; return -1; }
+    if (*line_length == 0U) return 0;
+    line[*line_length] = '\0';
+    return 1;
+}
+
 static int copy_value(char *dst, size_t cap, const char *src) {
     size_t n = strlen(src);
     if (!n || n >= cap) { errno = EINVAL; return -1; }
@@ -49,20 +66,42 @@ static int copy_value(char *dst, size_t cap, const char *src) {
     return 0;
 }
 
-static int safe_scope(const char *path, char out[PATH_MAX]) {
-    if (!path || path[0] != '/' || strlen(path) >= PATH_MAX) return -1;
-    if (!strcmp(path, "/") || !strcmp(path, "/etc") || !strcmp(path, "/usr") ||
-        !strcmp(path, "/home") || !strcmp(path, "/var") || !strcmp(path, "/root")) {
-        errno = EPERM;
-        return -1;
+static int valid_identifier(const char *s) {
+    if (!s || !*s) return 0;
+    for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
+        const unsigned char c = *p;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) return 0;
     }
+    return 1;
+}
+
+static int mark_once(unsigned *fields, unsigned bit) {
+    if (*fields & bit) { errno = EEXIST; return -1; }
+    *fields |= bit;
+    return 0;
+}
+
+static int is_broad_root(const char *path) {
+    return !strcmp(path, "/") || !strcmp(path, "/etc") || !strcmp(path, "/usr") ||
+           !strcmp(path, "/home") || !strcmp(path, "/var") || !strcmp(path, "/root");
+}
+
+static int safe_scope(const char *path, char out[PATH_MAX]) {
+    if (!path || path[0] != '/') { errno = EINVAL; return -1; }
+    if (strlen(path) >= PATH_MAX) { errno = ENAMETOOLONG; return -1; }
     if (!realpath(path, out)) return -1;
+    if (is_broad_root(out)) { errno = EPERM; return -1; }
     return 0;
 }
 
 static int path_within(const char *root, const char *path) {
     size_t n = strlen(root);
     return !strncmp(root, path, n) && (path[n] == '\0' || path[n] == '/');
+}
+
+static int scopes_overlap(const char *a, const char *b) {
+    return path_within(a, b) || path_within(b, a);
 }
 
 static int valid_op(const char *op) {
@@ -80,23 +119,32 @@ static int parse_policy(const char *file, struct policy *p) {
     enum { SECTION_NONE, SECTION_ROOTS, SECTION_RULES } section = SECTION_NONE;
     struct rule current = {0};
     bool have_rule = false;
-    char *line = NULL;
-    size_t cap = 0, bytes = 0;
-    ssize_t n;
+    unsigned top_fields = 0, current_fields = 0;
+    char line[MAX_LINE + 1U];
+    size_t bytes = 0;
     int rc = 0;
-    while ((n = getline(&line, &cap, in)) >= 0) {
-        bytes += (size_t)n;
-        if (bytes > MAX_POLICY_BYTES || n > MAX_LINE) { errno = EFBIG; rc = -1; break; }
+    for (;;) {
+        size_t line_length = 0, input_bytes = 0;
+        int line_status = read_policy_line(in, line, sizeof(line), &line_length, &input_bytes);
+        if (line_status == 0) break;
+        if (line_status < 0) { rc = -1; break; }
+        bytes += input_bytes;
+        if (bytes > MAX_POLICY_BYTES || line_length > MAX_LINE) { errno = EFBIG; rc = -1; break; }
         if (strchr(line, '\t')) { errno = EINVAL; rc = -1; break; }
         char *s = trim(line);
         if (!*s || *s == '#') continue;
         unsigned indent = (unsigned)(s - line);
         if (s[0] == '-' && s[1] == ' ') {
+            if (indent != 2U) { errno = EINVAL; rc = -1; break; }
             char *value = trim(s + 2);
             if (section == SECTION_ROOTS) {
                 if (p->root_count >= MAX_ROOTS) { errno = E2BIG; rc = -1; break; }
                 char root[PATH_MAX];
                 if (safe_scope(value, root) != 0) { rc = -1; break; }
+                for (size_t i = 0; i < p->root_count; ++i) {
+                    if (scopes_overlap(p->roots[i], root)) { errno = EEXIST; rc = -1; break; }
+                }
+                if (rc != 0) break;
                 strcpy(p->roots[p->root_count++], root);
                 continue;
             }
@@ -112,10 +160,13 @@ static int parse_policy(const char *file, struct policy *p) {
                     p->rules[p->rule_count++] = current;
                 }
                 memset(&current, 0, sizeof(current)); have_rule = true;
+                current_fields = 0;
                 char *colon = strchr(value, ':');
                 if (!colon) { errno = EINVAL; rc = -1; break; }
                 *colon = '\0';
-                if (strcmp(trim(value), "id") != 0 || copy_value(current.id, sizeof(current.id), trim(colon+1)) != 0) {
+                if (strcmp(trim(value), "id") != 0 || mark_once(&current_fields, 1U) != 0 ||
+                    copy_value(current.id, sizeof(current.id), trim(colon+1)) != 0 ||
+                    !valid_identifier(current.id)) {
                     errno = EINVAL; rc = -1; break;
                 }
                 continue;
@@ -127,10 +178,19 @@ static int parse_policy(const char *file, struct policy *p) {
         *colon = '\0';
         char *key = trim(s), *value = trim(colon + 1);
         if (indent == 0) {
+            unsigned bit = !strcmp(key, "schema_version") ? 1U :
+                (!strcmp(key, "policy_revision") ? 2U :
+                (!strcmp(key, "mode") ? 4U :
+                (!strcmp(key, "default_action") ? 8U :
+                (!strcmp(key, "protected_roots") ? 16U :
+                (!strcmp(key, "rules") ? 32U : 0U)))));
+            if (!bit) { errno = EINVAL; rc = -1; break; }
+            if (mark_once(&top_fields, bit) != 0) { rc = -1; break; }
             if (!strcmp(key, "schema_version")) {
                 if (strcmp(value, "policy.v1")) { errno = EINVAL; rc = -1; break; }
             } else if (!strcmp(key, "policy_revision")) {
-                if (copy_value(p->revision, sizeof(p->revision), value) != 0) { rc = -1; break; }
+                if (copy_value(p->revision, sizeof(p->revision), value) != 0 ||
+                    !valid_identifier(p->revision)) { errno = EINVAL; rc = -1; break; }
             } else if (!strcmp(key, "mode")) {
                 if (strcmp(value, "audit")) { errno = ENOTSUP; rc = -1; break; }
             } else if (!strcmp(key, "default_action")) {
@@ -144,21 +204,26 @@ static int parse_policy(const char *file, struct policy *p) {
                 errno = EINVAL; rc = -1; break;
             }
         } else if (section == SECTION_RULES && have_rule) {
+            if (indent != 4U) { errno = EINVAL; rc = -1; break; }
             if (!strcmp(key, "scope")) {
+                if (mark_once(&current_fields, 2U) != 0) { rc = -1; break; }
                 char scope[PATH_MAX];
                 if (safe_scope(value, scope) != 0 || copy_value(current.scope, sizeof(current.scope), scope) != 0) {
                     rc = -1; break;
                 }
             } else if (!strcmp(key, "operation")) {
+                if (mark_once(&current_fields, 4U) != 0) { rc = -1; break; }
                 if (!valid_op(value) || copy_value(current.operation, sizeof(current.operation), value) != 0) {
                     errno = EINVAL; rc = -1; break;
                 }
             } else if (!strcmp(key, "action")) {
+                if (mark_once(&current_fields, 16U) != 0) { rc = -1; break; }
                 if ((strcmp(value, "allow") && strcmp(value, "deny")) ||
                     copy_value(current.action, sizeof(current.action), value) != 0) {
                     errno = EINVAL; rc = -1; break;
                 }
             } else if (!strcmp(key, "subject")) {
+                if (mark_once(&current_fields, 8U) != 0) { rc = -1; break; }
                 if (strcmp(value, "any")) { errno = ENOTSUP; rc = -1; break; }
             } else {
                 errno = EINVAL; rc = -1; break;
@@ -177,30 +242,43 @@ static int parse_policy(const char *file, struct policy *p) {
             else if (p->rule_count >= MAX_RULES) { errno = E2BIG; rc = -1; }
         }
     }
-    free(line); fclose(in);
-    if (rc == 0 && (!p->revision[0] || !p->root_count)) { errno = EINVAL; return -1; }
+    fclose(in);
+    const unsigned required_top_fields = 1U | 2U | 4U | 16U | 32U;
+    if (rc == 0 && ((top_fields & required_top_fields) != required_top_fields ||
+                    !p->revision[0] || !p->root_count || !p->rule_count)) {
+        errno = EINVAL; return -1;
+    }
     for (size_t i = 0; rc == 0 && i < p->rule_count; ++i) {
         bool inside = false;
         for (size_t j = 0; j < p->root_count; ++j)
             if (path_within(p->roots[j], p->rules[i].scope)) inside = true;
         if (!inside) { errno = EPERM; rc = -1; }
     }
+    for (size_t i = 0; rc == 0 && i < p->rule_count; ++i) {
+        for (size_t j = i + 1U; j < p->rule_count; ++j) {
+            const struct rule *a = &p->rules[i], *b = &p->rules[j];
+            if (strcmp(a->operation, b->operation) || !scopes_overlap(a->scope, b->scope)) continue;
+            if (!strcmp(a->scope, b->scope) || strcmp(a->action, b->action)) {
+                errno = EINVAL; rc = -1; break;
+            }
+        }
+    }
     return rc;
 }
 
 static int evaluate(const struct policy *p, const char *path, const char *op,
                     char action[16], char rule_id[128]) {
-    bool allow = false, deny = false;
+    const struct rule *best = NULL;
     rule_id[0] = '\0';
     for (size_t i = 0; i < p->rule_count; ++i) {
         const struct rule *r = &p->rules[i];
         if (strcmp(r->operation, op) || !path_within(r->scope, path)) continue;
-        if (!strcmp(r->action, "deny")) { deny = true; strcpy(rule_id, r->id); }
-        else allow = true;
+        if (!best || strlen(r->scope) > strlen(best->scope)) best = r;
     }
-    if (deny) strcpy(action, "deny");
-    else if (allow) strcpy(action, "allow");
-    else strcpy(action, p->default_action);
+    if (best) {
+        strcpy(action, best->action);
+        strcpy(rule_id, best->id);
+    } else strcpy(action, p->default_action);
     return 0;
 }
 

@@ -8,7 +8,7 @@ Questions only. There is no answer key. Separate a policy decision, an observed 
 2. Why does `safe_scope` reject broad roots and call `realpath`? Which race remains after canonicalization?
 3. How does `path_within` distinguish a directory from a sibling path with the same textual prefix?
 4. Describe the parser's state machine for root and rule lists. Which YAML syntax is intentionally unsupported?
-5. What precedence does `evaluate` apply when allow and deny rules overlap? Which rule ID is returned?
+5. Which overlapping scope combinations does `parse_policy` reject, and how does `evaluate` choose the rule ID for valid nested same-action scopes?
 6. Trace a fanotify event from `read` to `/proc/self/fd` resolution and output filtering.
 7. Which file descriptors are owned by `cmd_audit`, and who must close each event FD?
 

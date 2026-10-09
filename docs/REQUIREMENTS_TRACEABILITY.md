@@ -4,10 +4,10 @@ Code presence is not full requirement verification. The unprivileged policy smok
 
 | Requirement | Source / artifact | Verification | Status |
 |---|---|---|---|
-| PDG-FR-001 | safe_scope, roots/scope validation | tests/smoke.sh (policy validation) | IMPLEMENTED |
+| PDG-FR-001 | safe_scope canonical broad-root recheck, roots/scope validation | `tests/policy_validation.py` broad alias case | IMPLEMENTED |
 | PDG-FR-002 | audit-only default; enforce refuses | tests/smoke.sh (audit-only explain) | IMPLEMENTED |
-| PDG-FR-003 | parse_policy | PDG-T-001 pending | IN_PROGRESS |
-| PDG-FR-004 | CLI dispatch | CLI smoke pending | IN_PROGRESS |
+| PDG-FR-003 | parse_policy field masks, root/rule collision checks, explicit scope precedence | `tests/policy_validation.py` duplicate/unknown/overlap cases; fuzzing pending | IN_PROGRESS |
+| PDG-FR-004 | CLI dispatch | smoke covers policy validate/explain, status, disable, enforce | IN_PROGRESS |
 | PDG-FR-005 | fanotify metadata PID or unknown | PDG-T-005 pending | IN_PROGRESS |
 | PDG-FR-006 | root canonicalization and mount filtering | PDG-T-007 pending | IN_PROGRESS |
 | PDG-FR-007 | revision and reason fields | PDG-T-005 pending | IMPLEMENTED |

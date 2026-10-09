@@ -2,17 +2,17 @@
 
 These exercises are unsolved; no implementation or patch is included. Use a private temporary lab directory. Do not try enforcement on a shared host.
 
-## Exercise 1 — Policy parser boundary cases
+## Exercise 1 — Enforcing parser bounds before allocation
 
-**Goal:** Reproduce parser behavior for duplicate keys, missing fields, long lines, too many rules, and scope escape.
+**Goal:** Make the policy reader stop oversized input before an unbounded line allocation occurs.
 
-**Starting points:** `parse_policy`, `safe_scope`, `path_within`, `tests/smoke.sh`.
+**Starting points:** `parse_policy`, `MAX_POLICY_BYTES`, `MAX_LINE`, the `getline` buffer, and `tests/policy_validation.py`.
 
-Create one policy per invalid case, assert stable error status and message category, and add tests for path-boundary confusion (for example, a sibling whose name shares the root prefix). Decide which cases should be rejected before any audit descriptor is opened.
+Replace or wrap the current line read with a bounded reader. Test a line exactly at the limit, a line one byte over, cumulative size overflow, a final line without a newline, and an I/O error. Confirm failures include a useful line number and happen before policy application.
 
-**Constraints:** Keep the parser subset explicit. Unknown syntax must fail closed. Tests must not depend on a real protected system directory.
+**Constraints:** Keep the parser subset explicit. Unknown syntax must fail closed. Do not add an unrestricted YAML dependency or allocate based on attacker-controlled line length.
 
-**Acceptance:** Every malformed policy is rejected, and a valid nested scope is accepted only beneath a declared root.
+**Acceptance:** Oversized input is rejected without retaining an oversized line buffer; boundary and error tests are deterministic.
 
 ## Exercise 2 — Safe fanotify audit event lifetime
 
@@ -26,17 +26,17 @@ Build a review table for invalid metadata, `readlink` error, out-of-root event, 
 
 **Acceptance:** The code and tests account for all acquired FDs; error cases produce an explicit failure/degraded result.
 
-## Exercise 3 — Policy precedence and immutable revision
+## Exercise 3 — Atomic policy revision swap
 
-**Goal:** Make overlapping allow/deny rules and policy revision behavior auditable.
+**Goal:** Design a reloadable policy owner that never exposes a partially validated revision.
 
-**Starting points:** `evaluate`, `policy explain`, policy revision field, `docs/ADR/ADR-001-audit-only-baseline.md`.
+**Starting points:** `parse_policy`, `struct policy`, `policy_revision`, `docs/ADR/ADR-001-audit-only-baseline.md`, and the validate→dry-run→swap SRS requirement.
 
-Add table-driven cases for no match, default action, allow-only, deny-only, and overlapping rules. Specify how a winning rule ID is selected when several denies match. Sketch and test a validate→dry-run→atomic revision swap for a future reload mode without enabling enforcement.
+Build a small isolated policy-holder abstraction that parses into a candidate, validates it, runs a dry-run against fixtures, and swaps the active immutable object only after every step succeeds. Test a malformed candidate, a dry-run failure, and a successful higher revision. Do not connect the abstraction to live fanotify enforcement.
 
 **Constraints:** A policy decision must retain `enforced:false`. No hot-reload path may partially replace the active policy.
 
-**Acceptance:** Every explain response identifies a deterministic rule/reason and policy revision; failed validation leaves the prior revision active.
+**Acceptance:** Failed parse or dry-run leaves the old policy pointer/revision intact; a successful swap exposes the new revision as one atomic state change.
 
 ## Owner attempt record
 

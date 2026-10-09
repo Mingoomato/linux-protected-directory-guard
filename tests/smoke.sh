@@ -24,6 +24,14 @@ rules:
 EOF
 
 "$bin" policy validate --file "$tmp/policy.yaml"
+"$bin" status --policy "$tmp/policy.yaml" >"$tmp/status.json"
+python3 - "$tmp/status.json" <<'PY'
+import json, sys
+status = json.load(open(sys.argv[1], encoding="utf-8"))
+assert status["mode"] == "audit" and status["enforced"] is False
+assert status["policy_revision"] == "smoke-1"
+PY
+"$bin" disable --root "$tmp/guard" >"$tmp/disable.out"
 "$bin" policy explain --file "$tmp/policy.yaml" --path "$tmp/guard/secret/file" --op open_for_write >"$tmp/decision.json"
 python3 - "$tmp/decision.json" <<'PY'
 import json, sys
@@ -32,6 +40,8 @@ assert decision["decision"] == "deny"
 assert decision["enforced"] is False
 assert decision["coverage"] == "audit_only"
 PY
+python3 "$root_dir/tests/policy_validation.py" "$bin" \
+    "$tmp/policy.yaml" "$tmp/guard" "$tmp"
 set +e
 "$bin" enforce --root "$tmp/guard" --policy "$tmp/policy.yaml" --confirm-lab-scope >"$tmp/enforce.out" 2>&1
 rc=$?

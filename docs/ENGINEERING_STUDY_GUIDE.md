@@ -4,7 +4,7 @@
 
 This project teaches policy validation, policy explanation, and audit-only filesystem observation. It deliberately keeps policy evaluation separate from enforcement: a displayed `deny` is a policy result, not evidence that Linux blocked an operation. The build always returns an explicit unsupported result for `enforce`.
 
-The Release build and unprivileged policy smoke test passed on the current Linux host; the separate ASan/UBSan smoke run is recorded as passed. The test validates policy parsing/explanation and the explicit unsupported-enforcement result. Privileged fanotify audit, mount marking, BPF LSM checks, VM scope isolation, parser fuzzing, and performance tests remain unverified. The current parser and audit backend are a partial SRS-03 implementation. Some SRS wording permits an audit-only release when enforcement mode is unsupported, but this does not establish hook coverage or runtime verification.
+The Release build and unprivileged policy smoke test passed on the current Linux host; the separate ASan/UBSan smoke run is recorded as passed. New parser cases cover repeated fields, duplicate IDs/roots, canonical broad-root aliases, overlong lines, cumulative-byte limits, conflicting overlapping actions, and most-specific same-action scope selection. Privileged fanotify audit, mount marking, BPF LSM checks, VM scope isolation, parser fuzzing, and performance tests remain unverified. The current parser and audit backend are a partial SRS-03 implementation. Some SRS wording permits an audit-only release when enforcement mode is unsupported, but this does not establish hook coverage or runtime verification.
 
 ## Why each subsystem exists
 
@@ -20,7 +20,7 @@ The Release build and unprivileged policy smoke test passed on the current Linux
 ## Data and control flow
 
 1. `main` selects `doctor`, `policy`, `status`, `audit`, `enforce`, or `disable`.
-2. Commands using a policy call `parse_policy`. The parser opens with `O_NOFOLLOW`, reads bounded lines, validates allowed top-level keys and rule keys, requires unique rule IDs, canonicalizes roots/scopes, and verifies each rule scope is within one declared root.
+2. Commands using a policy call `parse_policy`. The parser opens with `O_NOFOLLOW`, reads into a fixed line buffer and enforces a total-byte limit, rejects repeated/unknown fields and unsupported indentation, requires unique rule IDs and non-overlapping roots, canonicalizes roots/scopes, and verifies each rule scope is within one declared root. Conflicting actions on overlapping scopes fail validation.
 3. `policy explain` canonicalizes the requested path, checks it is inside a protected root, validates the operation, and calls `evaluate`. The result includes `policy_revision`, action, `enforced:false`, `hook_verified:false`, and `coverage:audit_only`.
 4. `audit` requires an exact declared root. It calls `fanotify_init(FAN_CLASS_NOTIF | FAN_NONBLOCK)` and marks the containing mount for `FAN_OPEN` and `FAN_CLOSE_WRITE` notifications. Because a mount mark is wider than the configured subdirectory, each event FD is resolved through `/proc/self/fd/N`; only a path under the exact canonical root is logged.
 5. The audit loop checks metadata version and event length, writes one JSON line, closes each event FD, and stops on signal or duration. It never writes permission responses.
@@ -29,7 +29,7 @@ The Release build and unprivileged policy smoke test passed on the current Linux
 ## Resource ownership and concurrency
 
 - The `policy` object is stack-owned by `main`; root/rule arrays are fixed-size and need no heap cleanup.
-- `parse_policy` owns the FD/`FILE*` and dynamic `getline` buffer; `fclose` closes the stream and the buffer is freed at the end.
+- `parse_policy` owns the FD/`FILE*` and a fixed-size line buffer; `fclose` closes the stream and line input cannot allocate based on an untrusted line length.
 - `cmd_audit` owns the fanotify FD and event-log FD. For every `meta->fd >= 0`, the code must close the notification FD even when path resolution fails or the event is filtered. The current loop does so in its expected paths.
 - `readlink` returns a byte count; code appends NUL before string operations. Output buffers are fixed and event serialization checks the final length.
 - The audit loop is single-threaded; signal handling only sets a `sig_atomic_t` flag. Kernel event queue pressure and a slow log write can still make observations incomplete.
@@ -37,7 +37,7 @@ The Release build and unprivileged policy smoke test passed on the current Linux
 
 ## Security assumptions and failure modes
 
-Policy text and CLI paths are untrusted. The parser has byte/line/root/rule bounds, rejects tabs and unknown fields, and restricts scope. Path canonicalization resolves an existing path; a path can still be renamed after the check. The YAML subset does not provide full YAML semantics or robust quoting.
+Policy text and CLI paths are untrusted. The parser has byte/line/root/rule bounds, rejects tabs, repeated/unknown fields, and unsupported indentation, and restricts scope. Canonicalization checks the resolved broad-root path, not only the original spelling. A path can still be renamed after the check. The YAML subset does not provide full YAML semantics or robust quoting.
 
 fanotify permission to create a group and permission to mark a mount are separate checks. The observer uses `FAN_CLASS_NOTIF`, not a permission-event class, so it cannot block an open. Mount-wide observation is filtered after the event; event loss, queue overflow, unsupported filesystems, inaccessible `/proc/self/fd`, path renames, and output errors must not be interpreted as complete audit coverage. The current implementation does not expose all such failures as a durable degraded status and does not test them on a privileged VM.
 
