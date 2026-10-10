@@ -28,17 +28,17 @@ test seam 또는 작은 fake event source를 추가해 정상 record, `event_len
 
 **합격 기준:** 각 수신 event FD의 소유권 전이표와 테스트 증거가 있고, 오류 응답이 `degraded`/`gap` 의미를 보존합니다.
 
-### 연습 3 — dirfd 기준 경로 identity 실험 설계
+### 연습 3 — 경로 하위 범위 경계 회귀 테스트
 
-**목표:** pathname 정규화와 kernel object identity가 달라지는 상황을 재현합니다.
+**목표:** 보호 root의 문자열 prefix와 실제 하위 경로를 혼동하지 않는지 작은 regression test로 고정합니다.
 
-**시작 지점:** `safe_scope`, `path_within`, event FD의 `readlink`/`fstat`, SRS의 symlink/hardlink/bind mount 및 namespace 항목.
+**시작 지점:** `safe_scope`, `path_within`, 정책 범위 테스트.
 
-임시 트리에서 rename race, symlink alias, hardlink, bind mount, 두 개 mount namespace 케이스를 구성하고 path 문자열, `st_dev`, inode가 어떻게 달라지는지 기록하세요. 이후 후보 설계로 root directory FD + `openat2` resolution flag를 비교하되 production policy enforcement에 연결하지 마세요.
+임시 경로에서 root 자체, root의 실제 child, root와 이름 prefix만 공유하는 sibling(예: `data`와 `data-old`)을 테스트 fixture로 만드세요. 감사 판정용 경로 범위 함수나 기존 호출 경로를 테스트해 sibling이 하위 경로로 판정되지 않는지 확인하세요.
 
-**제약:** 실제 system root를 수정하지 말고, 차단/deny를 주장하지 마세요. bind mount와 namespace 테스트는 disposable VM에서만 실행하세요.
+**제약:** 테스트가 정책 파싱/감사 결과만 확인하게 하고 실제 차단 집행으로 연결하지 마세요. symlink, bind mount와 namespace 경계는 이 작은 과제 범위에서 제외합니다.
 
-**합격 기준:** 각 케이스에서 문자열 비교가 보장하지 못하는 것을 설명하고, 테스트로 재현 가능한 coverage gap을 작성합니다.
+**합격 기준:** exact root와 정상 child의 결과가 명시되고, sibling-prefix 케이스가 거부되는 자동 회귀 테스트가 있습니다.
 
 ### 소유자 시도 기록
 
@@ -60,11 +60,9 @@ Use a test seam or fake event source with valid records, length overruns, metada
 
 Do not add permission events or allow/deny responses. Run mount-mark checks only in a disposable VM. Acceptance includes an FD ownership table and tests preserving `degraded`/`gap` semantics.
 
-### Exercise 3 — dirfd-based path identity experiment
+### Exercise 3 — Path containment boundary regression test
 
-Create temporary rename-race, symlink, hardlink, bind-mount, and mount-namespace cases. Record when pathname text, `st_dev`, and inode differ. Compare a root-directory-FD plus `openat2` resolution design, but do not connect the experiment to production enforcement.
-
-Do not modify system roots or claim blocking. Bind-mount and namespace tests belong in a disposable VM. Acceptance explains what string matching cannot guarantee and records reproducible coverage gaps.
+Add a small regression test for the difference between a protected root and a sibling that shares only its string prefix (for example, `data` and `data-old`). Cover the root itself, a real child, and the sibling using a temporary fixture and the existing audit-scope path. Do not connect the test to enforcement or add privileged mount cases. Acceptance records the expected result for all three paths and proves the sibling is not treated as a child.
 
 ### Owner attempt record
 
