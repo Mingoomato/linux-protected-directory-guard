@@ -62,6 +62,21 @@ decision = subprocess.run([
 ], check=True, capture_output=True, text=True)
 assert json.loads(decision.stdout)["reason_code"] == "deny-secret-write"
 
+# Exercise the CLI's static out-of-root rejection across a fixed 100-path set.
+# This is not a substitute for live fanotify filtering or workload testing.
+outside_paths = [work / "guard-sibling" / "file"]
+outside_paths.extend(work / f"outside-{i}" / "file" for i in range(99))
+for path in outside_paths:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("outside protected scope\n", encoding="utf-8")
+    result = subprocess.run([
+        str(binary), "policy", "explain", "--file", str(specific_path),
+        "--path", str(path), "--op", "open_for_write",
+    ], capture_output=True, text=True)
+    assert result.returncode == 2, (path, result.returncode, result.stdout, result.stderr)
+    assert result.stdout == "", (path, result.stdout)
+    assert "outside protected roots" in result.stderr, (path, result.stderr)
+
 for invalid_duration in ("abc", "-1", "12s", "999999999999999999999999"):
     result = subprocess.run([
         str(binary), "audit", "--root", str(lab_root), "--policy", str(base_path),

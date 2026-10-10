@@ -5,6 +5,12 @@
 #include <linux/fanotify.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
+
+static inline int file_identity_equal(dev_t left_device, ino_t left_inode,
+                                      dev_t right_device, ino_t right_inode) {
+    return left_device == right_device && left_inode == right_inode;
+}
 
 static inline int metadata_record_valid(const struct fanotify_event_metadata *meta,
                                         size_t remaining) {

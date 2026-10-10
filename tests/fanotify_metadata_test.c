@@ -47,5 +47,8 @@ int main(void) {
     CHECK(strcmp(event_operation(FAN_CLOSE_WRITE), "close_write_observed") == 0);
     CHECK(strcmp(event_operation(FAN_Q_OVERFLOW), "queue_overflow") == 0);
     CHECK(strcmp(event_operation(FAN_ACCESS), "unknown_event") == 0);
+    CHECK(file_identity_equal((dev_t)7, (ino_t)11, (dev_t)7, (ino_t)11));
+    CHECK(!file_identity_equal((dev_t)7, (ino_t)11, (dev_t)8, (ino_t)11));
+    CHECK(!file_identity_equal((dev_t)7, (ino_t)11, (dev_t)7, (ino_t)12));
     return 0;
 }

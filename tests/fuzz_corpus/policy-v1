@@ -1,0 +1,12 @@
+schema_version: policy.v1
+policy_revision: fuzz-seed
+mode: audit
+default_action: allow
+protected_roots:
+  - @ROOT@
+rules:
+  - id: fuzz-seed-rule
+    scope: @ROOT@
+    operation: open_for_write
+    action: deny
+    subject: any

@@ -4,13 +4,16 @@
 
 ### 학습 목표와 상태
 
-이 프로젝트는 좁은 정책 언어를 안전하게 파싱하고, 규칙을 설명하며, fanotify 알림을 차단과 혼동하지 않고 기록하는 과정을 학습합니다. 현재 구현은 audit-only 부분 구현입니다. GCC/Clang Release 및 Clang ASan/UBSan CTest가 각각 2/2 통과했고, 정적 분석과 비특권 정책 회귀가 통과했습니다. `doctor`는 BPF 설정·활성 LSM·BTF·bpftool 상태를 보고하며, 현재 호스트의 사전 점검은 bpftool 부재로 incomplete입니다. 실제 fanotify mount mark·실이벤트, queue overflow, privileged VM, BPF hook 및 성능 게이트는 미검증입니다. 자동 테스트 통과는 SRS 전체 구현이나 학습자의 개인 숙련 증거가 아닙니다.
+이 프로젝트는 좁은 정책 언어를 안전하게 파싱하고, 규칙을 설명하며, fanotify 알림을 차단과 혼동하지 않고 기록하는 과정을 학습합니다. 현재 구현은 audit-only 부분 구현입니다. GCC Release, Clang Release 및 Clang ASan/UBSan CTest가 각각 3/3 통과했고, Clang libFuzzer + ASan/UBSan CTest는 4/4 통과했습니다. parser fuzz smoke는 seeded 입력으로 2,000회 실행했고, reload rollback과 100개의 synthetic out-of-root CLI 요청을 검사했습니다. 이것들은 실제 fanotify workload 검증은 아닙니다. 정적 분석과 비특권 정책 회귀도 통과했습니다. `doctor`는 BPF 설정·활성 LSM·BTF·bpftool 상태를 보고하며, 현재 호스트의 사전 점검은 bpftool 부재로 incomplete입니다. 실제 fanotify mount mark·실이벤트, self-event suppression, SIGHUP reload loop, queue overflow, privileged VM, BPF hook 및 성능 게이트는 미검증입니다. 자동 테스트 통과는 SRS 전체 구현이나 학습자의 개인 숙련 증거가 아닙니다.
 
 ### 중요한 하위 시스템이 존재하는 이유
 
 | 하위 시스템 | 존재 이유 | 주요 코드 |
 |---|---|---|
 | 제한된 정책 파서 | 미지의 YAML 기능을 추측하지 않고, 입력량과 문법을 제한 | `parse_policy`, `read_policy_line` |
+| parser fuzz harness | 잘못된 바이트열이 production parser에 들어가도 사용자 공간 crash/UB가 발생하는지 탐색 | `tests/policy_parser_fuzz.c`, `tests/fuzz_corpus/policy-v1` |
+| audit 정책 reload | SIGHUP에서 candidate 검증·dry-run 후 마지막 유효 revision을 event loop 경계에서 교체 | `reload_signal`, `reload_policy`, `policy_dry_run` |
+| journal self-event guard | audit 파일 자체를 file identity로 식별해 자신의 open event 기록이 반복되지 않게 함 | `file_identity_equal`, `cmd_audit` |
 | 경로/범위 검증 | 절대 경로를 canonicalize하고 광범위 root 및 범위 충돌을 거부 | `safe_scope`, `path_within`, `scopes_overlap` |
 | 결정적 정책 설명 | 규칙 우선순위를 사람이 검사하되 실제 kernel 차단과 구분 | `evaluate`, `cmd_explain` |
 | capability 진단 | fanotify group 생성 시도와 BPF LSM 설정·활성 상태·BTF·tooling을 분리해 기록하며, hook 부착을 주장하지 않음 | `cmd_doctor`, `bpf_lsm_config_enabled`, `executable_on_path` |
@@ -28,6 +31,8 @@
 7. event FD와 log FD는 모든 정상/오류 경로에서 닫습니다. queue overflow, metadata 오류, path/read/poll/write 실패는 coverage gap/degraded로 처리하고 0이 아닌 종료를 반환합니다. 종료 신호나 지정 시간이 끝나면 종료 이유를 기록합니다.
 8. `enforce`는 항상 `PDG_UNSUPPORTED_ENFORCEMENT`를 반환합니다. BPF LSM은 진단만 하며 program을 load하지 않습니다.
 9. `doctor`는 `fanotify_init` 결과와 errno를 기록하고, `/boot/config-<release>`에서 `CONFIG_BPF_LSM`, `/sys/kernel/security/lsm`에서 정확한 active LSM token, `/sys/kernel/btf/vmlinux`, `PATH`의 실행 가능한 `bpftool`을 확인합니다. hook을 선택하지 않았으므로 `bpf_hook_probe=not_run_no_hook_selected`입니다.
+10. `PDG_ENABLE_FUZZING=ON`이면 Clang libFuzzer target이 같은 production parser translation unit을 ASan/UBSan으로 빌드합니다. 고정 corpus의 `@ROOT@`는 실행 중 생성한 canonical 임시 경로로 치환되고, 각 입력은 제한된 임시 파일을 거쳐 `parse_policy`에 전달됩니다. CTest smoke는 2,000개 입력을 실행합니다. 100개의 별도 synthetic 경로 테스트는 `policy explain`의 root 바깥 거부만 검사합니다.
+11. audit 중 SIGHUP은 flag만 설정합니다. 단일 event loop가 다음 경계에서 policy file을 candidate struct로 파싱하고, 보호 root가 그대로인지·revision이 새 값인지 확인한 뒤 operation 목록을 dry-run합니다. 통과하면 전체 `struct policy`를 교체하고, 실패하면 기존 객체를 보존합니다. journal과 동일한 `(st_dev, st_ino)`인 event FD는 기록 전에 닫고 건너뜁니다.
 
 ### Linux 인터페이스, 소유권 및 concurrency
 
@@ -35,7 +40,9 @@
 - `policy`와 고정 입력 버퍼는 호출 스택이 소유합니다. `FILE*`는 `fclose`가 underlying fd까지 닫습니다.
 - `cmd_audit`는 fanotify group FD와 journal FD를 소유합니다. 각 `meta->fd`는 수신 프로그램이 닫아야 하는 event FD입니다. `write_all`은 부분 write와 `EINTR`를 처리합니다.
 - 버퍼는 metadata 구조체에 맞춰 정렬하고 `event_len`, `metadata_len`, 남은 read 길이를 교차 검증합니다. 파서와 event buffer는 입력 길이에 따라 동적 확장하지 않습니다.
-- event loop는 단일 스레드입니다. signal handler는 `sig_atomic_t` 플래그만 세우고 정리/저널 작성은 일반 흐름에서 합니다. 동시 reload나 policy swap은 없습니다.
+- event loop는 단일 스레드입니다. signal handler는 `sig_atomic_t` 플래그만 세우고 정리/저널 작성은 일반 흐름에서 합니다. SIGHUP candidate는 reload 함수의 stack 소유이며, parse/root compatibility/dry-run 후 event loop 경계에서 active struct로 복사합니다. 이는 이 단일-thread 루프에서의 논리적 atomicity이며 concurrent lock-free swap은 아닙니다. 실패 candidate는 active revision을 덮지 않습니다.
+- fuzz target도 기본 libFuzzer 실행처럼 단일 process에서 순차 호출을 가정합니다. 초기화가 생성한 임시 root와 policy 파일은 target이 소유하며 `atexit`에서 정리합니다. 입력 버퍼는 고정 크기이고, 매 iteration policy 파일을 truncate/write한 뒤 parser가 연 stream을 `fclose`로 닫습니다. 별도의 privileged kernel 자원은 생성하지 않습니다.
+- log FD의 `fstat` device/inode는 monitor 수명 동안 보관합니다. event FD의 identity가 일치하면 해당 event FD를 닫고 건너뜁니다. 이는 journal 자기 이벤트 재귀를 막는 예외 하나이며, 관리자 test-tool 예외를 제공하지는 않습니다.
 
 ### 보안 가정과 실패 양상
 
@@ -52,20 +59,25 @@ fanotify PID는 event metadata에 들어온 PID 관측값일 뿐이고 UID, proc
 - Landlock은 보통 호출 프로세스의 이후 접근을 제한하는 sandbox 인터페이스이지, 임의의 모든 프로세스를 제어하는 daemon 대체물이 아닙니다.
 - audit-only와 policy explanation은 안전한 학습 표면이지만 차단 기능은 아닙니다.
 - 공식/기술 참고: [Linux kernel fanotify guide](https://docs.kernel.org/6.15/admin-guide/filesystem-monitoring.html), [kernel procfs guide](https://docs.kernel.org/filesystems/proc.html), [`fanotify(7)`](https://man7.org/linux/man-pages/man7/fanotify.7.html), [`fanotify_init(2)`](https://man7.org/linux/man-pages/man2/fanotify_init.2.html), [`fanotify_mark(2)`](https://man7.org/linux/man-pages/man2/fanotify_mark.2.html), [`uname(2)`](https://man7.org/linux/man-pages/man2/uname.2.html), [`access(2)`](https://man7.org/linux/man-pages/man2/access.2.html), [`capabilities(7)`](https://man7.org/linux/man-pages/man7/capabilities.7.html), [BPF LSM](https://docs.kernel.org/bpf/prog_lsm.html), [Linux LSM](https://docs.kernel.org/admin-guide/LSM/index.html), [Landlock](https://docs.kernel.org/userspace-api/landlock.html).
+- parser fuzzing reference: [LLVM libFuzzer](https://llvm.org/docs/LibFuzzer.html) describes its target ABI, input corpus directories, mutation and sanitizer use.
 
 ## English
 
-This project teaches bounded policy parsing, deterministic explanation, and audit-only fanotify observation without confusing a policy result with kernel enforcement. It remains a partial audit-only implementation. GCC/Clang Release and Clang ASan/UBSan CTest each passed 2/2; static analysis and unprivileged policy regressions passed. `doctor` reports BPF config/active-LSM/BTF/tool state; the current host has an incomplete preflight because `bpftool` is absent. Live fanotify mount marks/events, overflow injection, privileged VM behavior, BPF hooks, and performance gates remain unverified. Automated tests do not prove full SRS completion or the owner's personal mastery.
+This project teaches bounded policy parsing, deterministic explanation, and audit-only fanotify observation without confusing a policy result with kernel enforcement. It remains a partial audit-only implementation. GCC Release, Clang Release, and Clang ASan/UBSan CTest each passed 3/3; the Clang libFuzzer + ASan/UBSan suite passed 4/4, including a 2,000-input seeded parser smoke. Reload rollback and one hundred synthetic out-of-root CLI requests were also checked; these do not exercise live fanotify workloads. Static analysis and unprivileged policy regressions passed. `doctor` reports BPF config/active-LSM/BTF/tool state; the current host has an incomplete preflight because `bpftool` is absent. Live fanotify mount marks/events, journal self-event suppression, SIGHUP event-loop reload, overflow injection, privileged VM behavior, BPF hooks, and performance gates remain unverified. Automated tests do not prove full SRS completion or the owner's personal mastery.
 
 The policy parser uses a fixed-size `struct policy`, `open(O_NOFOLLOW)`, bounded line and total-input sizes, explicit fields, canonical roots, and conflict checks. `evaluate` chooses the most-specific valid same-action scope. `policy explain` returns a policy result with `enforced:false`, `hook_verified:false`, and `coverage:audit_only`.
 
 The observer creates a `FAN_CLASS_NOTIF` group, marks the containing mount, reads packed metadata, validates version and lengths against the available bytes, resolves each event FD through `/proc/self/fd`, and filters to the configured canonical root. `fstat` device major/minor and inode are recorded separately from the path. The PID field is labeled with its fanotify metadata source, not as a durable process identity. Permission responses are never sent.
 
+With `PDG_ENABLE_FUZZING=ON`, Clang builds `tests/policy_parser_fuzz.c` with libFuzzer, ASan, and UBSan. It includes the same parser implementation as the CLI, expands a corpus root marker into a private temporary directory, and rewrites a bounded temporary regular file before each parse. The seeded CTest run makes 2,000 calls and looks for memory-safety failures and crashes. It does not prove that all malformed policies are rejected correctly. A separate fixed set of 100 synthetic out-of-root CLI paths tests the `policy explain` guard only; it does not execute processes under fanotify.
+
+For audit policy updates, SIGHUP only sets a signal-safe flag. At the next event-loop boundary the program parses a candidate, requires the same root set and a different revision, and runs a dry-run over the supported operation list before replacing the active policy object. The single-threaded loop provides logical atomicity for its readers; a rejected candidate leaves the active revision untouched. A unit test exercises transaction decisions, but signal delivery and journal records are not run because the fanotify path is privileged. The journal's device/inode identity is compared with each in-scope event FD to skip the journal's own event; live suppression remains unverified, and administrator-tool exceptions are not implemented.
+
 `doctor` performs a separate read-only preflight: `uname` selects `/boot/config-<release>`, bounded `fgets` reads `CONFIG_BPF_LSM`, the exact `bpf` token is searched in `/sys/kernel/security/lsm`, `access` checks kernel BTF readability and executable `bpftool` candidates from `PATH`, and JSON reports each observation plus `not_run_no_hook_selected`. A missing config is `unknown`; a missing bpftool makes the aggregate state `incomplete`. This is environment evidence, not proof that a program verifies or attaches.
 
 Relevant interfaces include `uname(2)`, `access(2)`, `fopen(3)`/`fgets(3)`, `fanotify_init(2)`, `fanotify_mark(2)`, `poll(2)`, `read(2)`, `readlink(2)`, `fstat(2)`, `write(2)`, and `close(2)`. The kernel interfaces are the fanotify API, `/proc/self/fd`, securityfs LSM list, kernel config file, and `/sys/kernel/btf/vmlinux`.
 
-The policy and parser buffers are stack-owned. `cmd_doctor` uses bounded stack buffers for kernel release, config path, PATH candidates, and the active-LSM file; its `FILE*` is closed after config/LSM reads. The audit function owns the fanotify FD, log FD, read buffer, and each event FD; every valid event FD is closed. The event loop is single-threaded; signals only set a `sig_atomic_t` flag. `write_all` handles partial writes and `EINTR`. A no-follow owner-checked regular journal is restricted to mode `0600`; JSON output preserves valid UTF-8 and escapes invalid pathname bytes.
+The policy and parser buffers are stack-owned. `cmd_doctor` uses bounded stack buffers for kernel release, config path, PATH candidates, and the active-LSM file; its `FILE*` is closed after config/LSM reads. The audit function owns the fanotify FD, log FD, read buffer, and each event FD; every valid event FD is closed. Reload owns a candidate policy on the calling stack and replaces the active object only after checks pass; the signal handler writes only a `sig_atomic_t` flag. The fuzz harness owns a fixed input-expansion buffer, an `mkdtemp` root, and an `mkstemp` policy path; it closes each write descriptor and relies on `parse_policy`/`fclose` for read-side cleanup before `atexit` removes the temporary paths. libFuzzer calls this target sequentially by default. `write_all` handles partial writes and `EINTR`. A no-follow owner-checked regular journal is restricted to mode `0600`; its `(st_dev, st_ino)` pair is retained to ignore the journal's own in-scope event. JSON output preserves valid UTF-8 and escapes invalid pathname bytes.
 
 Malformed metadata, queue overflow, missing event FDs, path resolution errors, poll/read errors, and journal failures produce explicit degraded/unsupported results instead of a healthy-success claim. `realpath` and path filtering do not solve rename races, hard links, bind mounts, namespace identity, or inode reuse. fanotify group creation is not proof that mount marking or a particular filesystem/hook is supported. Active BPF LSM is not proof a program can attach. `enforce` always returns `PDG_UNSUPPORTED_ENFORCEMENT`.
 

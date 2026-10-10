@@ -42,6 +42,12 @@
 25. policy reload를 추가한다면 parse 실패, dry-run 실패, 부분 apply 시 마지막 유효 revision을 어떻게 보존하겠습니까?
 26. daemon 종료와 queue overflow에서 fail-open/closed/unsupported 중 어떤 동작을 mode별로 선택하겠습니까? SRS의 안전 경계로 근거를 설명하세요.
 27. 이 저장소의 다음 불확실성을 가장 줄일 테스트 하나를 선택하고 근거를 제시하세요: parser fuzz, privileged mount mark, namespace isolation, queue-overflow injection, 또는 성능 측정.
+28. CTest가 seed 파일 하나가 아니라 임시 corpus directory를 libFuzzer에 넘겨야 하는 이유는 무엇이며, 두 방식이 실행하는 작업은 어떻게 다른가요?
+29. fuzz target의 `mkdtemp` root, `mkstemp` policy file, per-input stack policy, parser `FILE*`의 소유자는 누구이며 정상 종료와 오류 때 수명은 어떻게 끝나나요?
+30. 2,000회 crash/ASan/UBSan smoke가 통과했을 때 입증되는 것과 입증되지 않는 것을 구분하세요. semantic acceptance oracle와 coverage report가 왜 별도인지 설명하세요.
+31. `policy explain`에서 100개 synthetic out-of-root 경로를 거부한 결과를 SRS의 실제 workload false-deny 0건과 같은 증거로 볼 수 없는 이유는 무엇인가요?
+32. journal self-event를 path 문자열이 아니라 `(st_dev, st_ino)`로 제외하는 이유는 무엇이며, 이 예외가 놓치는 self-event와 alias 조건은 무엇인가요?
+33. reload handler가 signal context에서 candidate parse/swap을 하지 않는 이유는 무엇인가요? 현재 단일 event loop가 제공하는 논리적 원자성과 multi-thread atomicity를 구분하세요.
 
 ## English
 
@@ -85,5 +91,11 @@ Questions only; no answer key is included. Separate policy explanation, observed
 25. If policy reload were added, how would parse failure, dry-run failure, and partial apply preserve the last valid revision?
 26. For daemon exit and queue overflow, which of fail-open, fail-closed, or unsupported would you choose per mode? Defend it against the SRS safety boundary.
 27. Choose the single next test that would reduce the most uncertainty: parser fuzzing, privileged mount marking, namespace isolation, queue-overflow injection, or performance measurement.
+28. Why must CTest pass a temporary corpus directory rather than one seed file to libFuzzer, and what work does each mode perform?
+29. Who owns the fuzz target's `mkdtemp` root, `mkstemp` policy file, per-input stack policy, and parser `FILE*`, and how does each lifetime end on success and error?
+30. What does a passing 2,000-run crash/ASan/UBSan smoke establish and leave unproven? Why are semantic acceptance oracles and coverage reports separate?
+31. Why is rejecting 100 synthetic out-of-root paths through `policy explain` not equivalent evidence to zero false denials among 100 real workload trials in the SRS?
+32. Why suppress journal self-events by `(st_dev, st_ino)` instead of path text, and which self-events or alias conditions remain outside that exception?
+33. Why does the reload handler avoid parsing or swapping a candidate in signal context? Distinguish the event loop's logical atomicity from multi-thread atomicity.
 
 Do not infer owner mastery from CTest success. Evidence must come from an independently attempted exercise and a reasoned technical defense.

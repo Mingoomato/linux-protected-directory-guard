@@ -39,7 +39,9 @@ struct policy {
 };
 
 static volatile sig_atomic_t stopping;
+static volatile sig_atomic_t reload_requested;
 static void stop_signal(int sig) { (void)sig; stopping = 1; }
+static void reload_signal(int sig) { (void)sig; reload_requested = 1; }
 
 static char *trim(char *s) {
     while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') ++s;
@@ -289,6 +291,54 @@ static int evaluate(const struct policy *p, const char *path, const char *op,
     return 0;
 }
 
+static int same_protected_roots(const struct policy *left, const struct policy *right) {
+    if (left->root_count != right->root_count) return 0;
+    for (size_t i = 0; i < left->root_count; ++i) {
+        bool found = false;
+        for (size_t j = 0; j < right->root_count; ++j)
+            if (!strcmp(left->roots[i], right->roots[j])) found = true;
+        if (!found) return 0;
+    }
+    return 1;
+}
+
+static int policy_dry_run(const struct policy *candidate) {
+    static const char *const operations[] = {
+        "open_for_read", "open_for_write", "unlink", "rename"
+    };
+    for (size_t i = 0; i < candidate->root_count; ++i) {
+        for (size_t op = 0; op < sizeof(operations) / sizeof(operations[0]); ++op) {
+            char action[16], rule_id[128];
+            if (evaluate(candidate, candidate->roots[i], operations[op], action, rule_id) != 0 ||
+                (strcmp(action, "allow") && strcmp(action, "deny"))) {
+                errno = EINVAL;
+                return -1;
+            }
+        }
+    }
+    for (size_t i = 0; i < candidate->rule_count; ++i) {
+        char action[16], rule_id[128];
+        if (evaluate(candidate, candidate->rules[i].scope,
+                     candidate->rules[i].operation, action, rule_id) != 0 ||
+            (strcmp(action, "allow") && strcmp(action, "deny")) ||
+            !rule_id[0]) {
+            errno = EINVAL;
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int reload_policy(struct policy *active, const char *policy_file) {
+    struct policy candidate;
+    if (parse_policy(policy_file, &candidate) != 0) return -1;
+    if (!same_protected_roots(active, &candidate)) { errno = EPERM; return -1; }
+    if (!strcmp(active->revision, candidate.revision)) { errno = EALREADY; return -1; }
+    if (policy_dry_run(&candidate) != 0) return -1;
+    *active = candidate;
+    return 0;
+}
+
 static int json_escape(const char *s, char *out, size_t cap);
 
 static const char *opt(int argc, char **argv, const char *key, const char *fallback) {
@@ -394,8 +444,8 @@ static int parse_duration(const char *text, int *seconds) {
     return 0;
 }
 
-static int cmd_audit(const struct policy *p, const char *root_arg, const char *events_path,
-                    int duration_sec) {
+static int cmd_audit(struct policy *p, const char *policy_file, const char *root_arg,
+                     const char *events_path, int duration_sec) {
     char root[PATH_MAX];
     if (safe_scope(root_arg, root) != 0) { perror("dirguardctl: root"); return 2; }
     bool listed = false;
@@ -438,6 +488,7 @@ static int cmd_audit(const struct policy *p, const char *root_arg, const char *e
         return 1;
     }
     signal(SIGINT, stop_signal); signal(SIGTERM, stop_signal);
+    signal(SIGHUP, reload_signal);
     time_t started = time(NULL);
     alignas(struct fanotify_event_metadata) unsigned char buf[65536];
     char escaped_root[PATH_MAX * 6U];
@@ -450,6 +501,43 @@ static int cmd_audit(const struct policy *p, const char *root_arg, const char *e
     uint64_t event_sequence = 0;
     const char *failure_reason = "MONITOR_STOPPED";
     while (!stopping) {
+        if (reload_requested) {
+            reload_requested = 0;
+            char previous_revision[sizeof(p->revision)];
+            strcpy(previous_revision, p->revision);
+            errno = 0;
+            int reload_error = reload_policy(p, policy_file) == 0 ? 0 : errno;
+            char line[768];
+            int len;
+            if (reload_error == 0) {
+                len = snprintf(line, sizeof(line),
+                    "{\"schema_version\":\"guard_decision.v1\",\"id\":\"pdg-%s-%" PRIu64 "\","
+                    "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
+                    "\"previous_policy_revision\":\"%s\",\"operation\":\"policy_reload\","
+                    "\"source_api\":\"sighup\",\"decision\":\"unknown\","
+                    "\"reason_code\":\"POLICY_REVISION_SWAPPED\",\"enforced\":false,"
+                    "\"hook_verified\":false,\"coverage\":\"audit_only\",\"errno\":null}\n",
+                    p->revision, ++event_sequence, p->revision, p->revision, previous_revision);
+            } else {
+                len = snprintf(line, sizeof(line),
+                    "{\"schema_version\":\"guard_decision.v1\",\"id\":\"pdg-%s-%" PRIu64 "\","
+                    "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
+                    "\"operation\":\"policy_reload\",\"source_api\":\"sighup\","
+                    "\"decision\":\"unknown\",\"reason_code\":\"POLICY_RELOAD_REJECTED\","
+                    "\"enforced\":false,\"hook_verified\":false,\"coverage\":\"audit_only\","
+                    "\"errno\":%d}\n",
+                    p->revision, ++event_sequence, p->revision, p->revision, reload_error);
+                fprintf(stderr,
+                        "{\"error\":\"PDG_POLICY_RELOAD_REJECTED\",\"policy_revision\":\"%s\",\"errno\":%d}\n",
+                        p->revision, reload_error);
+            }
+            int record_error = (len <= 0 || (size_t)len >= sizeof(line)) ? EOVERFLOW :
+                (write_all(logfd, line, (size_t)len) != 0 ? errno : 0);
+            if (record_error != 0) {
+                audit_rc = 1; failure_reason = "EVENT_LOG_WRITE_FAILED";
+                failure_errno = record_error; break;
+            }
+        }
         if (duration_sec > 0 && time(NULL) - started >= duration_sec) break;
         struct pollfd pfd = { .fd = fan, .events = POLLIN };
         int ready = poll(&pfd, 1, 500);
@@ -513,6 +601,12 @@ static int cmd_audit(const struct policy *p, const char *root_arg, const char *e
                         if (metadata_error == 0) metadata_error = EIO;
                     }
                     else {
+                        if (file_identity_equal(event_stat.st_dev, event_stat.st_ino,
+                                                log_stat.st_dev, log_stat.st_ino)) {
+                            close(meta->fd);
+                            off += meta->event_len;
+                            continue;
+                        }
                         errno = 0;
                         if (json_escape(resolved, escaped, sizeof(escaped)) != 0) {
                             metadata_error = errno;
@@ -718,7 +812,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "PDG_INVALID_ARGUMENT: duration must be a non-negative integer\n");
             return 2;
         }
-        return cmd_audit(&policy, root, events, duration);
+        return cmd_audit(&policy, policy_file, root, events, duration);
     }
     usage(); return 2;
 }

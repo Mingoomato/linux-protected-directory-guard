@@ -34,6 +34,18 @@
 - 경계 테스트: malformed metadata가 다음 record로 건너뛰지 않고 중단하는지, out-of-scope event에서 event FD를 닫는지, 로그 오류가 성공으로 보이지 않는지 확인합니다.
 - 실제 privileged event 수집과 overflow/log fault injection은 아직 VM에서 검증하지 않았습니다.
 
+### 6. 정책 parser fuzz 경로
+
+`PDG_ENABLE_FUZZING=ON`을 켜면 CMake가 Clang libFuzzer target을 추가합니다. `tests/policy_parser_fuzz.c`는 CLI와 같은 `dirguardctl.c` translation unit을 포함해 내부 `parse_policy`를 직접 호출합니다. 초기화 시 `mkdtemp` root와 `mkstemp` policy 파일을 만들고, seed의 `@ROOT@`를 그 canonical 경로로 바꿉니다. 각 입력마다 임시 파일을 truncate/write하고 실제 parser의 `open(O_NOFOLLOW)` 경로로 읽게 합니다. target은 parse의 성공 여부 자체를 oracle로 삼지 않고, crash와 ASan/UBSan 오류를 찾습니다.
+
+CTest runner는 seed를 임시 corpus 디렉터리에 복사해 `-runs=2000` 변이를 수행하고 생성 corpus를 임시 디렉터리와 함께 지웁니다. seed 파일 자체를 fuzzer 인자로 주면 입력 재생만 하므로, 디렉터리 인자를 주는 runner가 필요합니다. smoke 통과는 parser grammar의 완전성이나 장시간 fuzzing을 보장하지 않습니다.
+
+### 7. audit 정책 reload와 self-event 제외
+
+`cmd_audit`는 SIGINT/SIGTERM handler 외에 SIGHUP handler를 설치합니다. handler는 `reload_requested` flag만 설정합니다. event loop가 flag를 확인하면 `reload_policy`가 새 `struct policy`를 임시 객체로 파싱하고, 현재 revision과 다른지, 보호 root 집합이 같은지 확인하고 `policy_dry_run`을 수행합니다. 모두 통과한 경우에만 `*active = candidate`로 바꿉니다. 단일 스레드 event loop가 교체 경계 밖에서 policy를 읽지 않으므로 이 구현에서 원자성은 event-loop 관점의 논리적 swap입니다. 파싱/호환성 실패는 기존 policy를 유지하고 거부 사실을 stderr와 journal에 씁니다. journal write가 실패하면 monitor는 degraded로 끝납니다.
+
+audit 시작 시 `fstat(logfd)`의 device/inode를 저장합니다. event FD를 `fstat`한 identity가 journal과 같으면 해당 event FD를 닫고 skip합니다. 이는 journal 자기 event를 다시 journal에 쓰는 loop를 막습니다. SRS의 administrator test-tool exception과 실제 privileged self-event 시험은 아직 없습니다. `tests/policy_reload_test.c`는 reload transaction의 candidate 성공/실패 경로를 단위 검사하지만 SIGHUP 전달과 fanotify event loop를 실행하지 않습니다.
+
 ## English
 
 ### 1. Policy input (`parse_policy`)
@@ -54,6 +66,18 @@ The loop waits with `poll`, reads a byte buffer, validates metadata version/rese
 
 Queue overflow, malformed records, missing event FDs, path/read/poll/journal failures produce a degraded nonzero exit. Normal duration/signal stops are journaled. Every valid event FD and both owned group/log descriptors are closed. No permission response is ever sent.
 
+### 6. Audit policy reload and self-event exclusion
+
+`cmd_audit` installs a SIGHUP handler that sets only `reload_requested`. At an event-loop boundary, `reload_policy` parses into a candidate object, requires a different revision and the same protected-root set, then runs `policy_dry_run`. Only a fully accepted candidate replaces the active struct. Because the event loop is single-threaded, no event handler can read a partially replaced policy; a failed candidate keeps the old revision. The monitor journals accepted/rejected reload outcomes and degrades if that journal write fails. This transaction helper is unit-tested; SIGHUP delivery and event-loop behavior remain unverified on the privileged fanotify path.
+
+After checking an event FD is under the protected root, the loop compares its `fstat` device/inode with the journal's saved identity. A match closes and skips the FD, preventing the journal's own open event from being recorded recursively. Other self-process events and administrator test-tool exceptions are not implemented. The identity comparator is unit-tested; live event suppression is not.
+
 ### 4. Diagnostics and failure ownership
 
 `cmd_doctor` records basic group creation and errno, exact active-LSM token, `CONFIG_BPF_LSM` from `/boot/config-<uname.release>`, kernel BTF presence, executable `bpftool` availability, an aggregate preflight state, and the explicit `not_run_no_hook_selected` probe result. These read-only checks do not prove mount marking, filesystem coverage, or hook attachability. `enforce` is explicitly unsupported and `disable` has no persistent hook to remove. The stack policy is owned by `main`; the parser owns its stream; `cmd_audit` owns the fanotify and journal FDs, read buffer, and each returned event FD. Privileged runtime and injected failure cases remain unverified.
+
+### 5. Policy parser fuzz path
+
+With `PDG_ENABLE_FUZZING=ON`, CMake adds a Clang libFuzzer target that includes the same `dirguardctl.c` translation unit and calls the internal `parse_policy`. Startup creates a `mkdtemp` root and `mkstemp` policy file, then expands the seed's `@ROOT@` marker to that canonical path. Each input truncates and rewrites the temporary file before exercising the production `open(O_NOFOLLOW)` parser path. The target seeks crashes and ASan/UBSan findings; it does not use the parser's accepted/rejected result as a semantic oracle.
+
+The CTest runner copies the seed into a temporary corpus directory and runs 2,000 mutations there, cleaning generated corpus files afterward. Passing the seed as a file would replay it rather than mutate it, so the directory-based runner is intentional. This smoke run is not proof of grammar completeness or sustained fuzz coverage.

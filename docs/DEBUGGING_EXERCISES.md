@@ -8,9 +8,9 @@
 
 **목표:** 작은 policy grammar의 경계와 거부 조건을 독립적으로 재현합니다.
 
-**시작 지점:** `parse_policy`, `read_policy_line`, `tests/policy_validation.py`, `MAX_LINE`, `MAX_POLICY_BYTES`.
+**시작 지점:** `parse_policy`, `read_policy_line`, `tests/policy_validation.py`, `tests/policy_parser_fuzz.c`, `MAX_LINE`, `MAX_POLICY_BYTES`.
 
-정상 policy에서 필드 순서/공백/주석을 변형하고, 중복 필드·잘못된 들여쓰기·비정상 종료 줄·exact limit 및 1 byte 초과·누적 크기 초과·out-of-root scope를 만드는 property/fuzz test harness를 작성하세요. 실패가 bounded input 안에서 결정적으로 반환되는지 확인하고 parser가 지원하는 YAML subset의 한계를 문서화하세요.
+기존 seeded smoke를 자신의 재현 과제로 그대로 베끼지 말고, 정상/비정상 policy 변이를 추가해 semantic acceptance/rejection oracle을 독립적으로 설계하세요. 필드 순서/공백/주석, 중복·잘못된 들여쓰기·비정상 종료 줄·경계 크기·누적 크기·out-of-root scope를 다루고 parser의 작은 YAML subset을 문서화하세요. Fuzzer가 crash 없이 끝났다는 사실과 policy가 올바르게 분류됐다는 사실을 구분하세요.
 
 **제약:** unrestricted YAML parser로 교체하지 말고, attacker 크기의 line을 무제한 할당하지 마세요. Fuzzing은 사용자 공간 parser만 대상으로 합니다.
 
@@ -50,7 +50,7 @@ These three exercises are intentionally unsolved. No complete patch or answer co
 
 ### Exercise 1 — Policy parser property/fuzz testing
 
-Build a deterministic property or fuzz harness around `parse_policy`, `read_policy_line`, and the existing validation tests. Mutate valid policies and generate duplicate fields, bad indentation, missing final newline, exact/over-limit lines, total-size overflow, and out-of-root scopes. Confirm bounded deterministic rejection and document the supported YAML subset.
+Independently extend policy-parser testing with a semantic acceptance/rejection oracle; do not count a crash-free fuzz run as proof that decisions are correct. Mutate valid policies and generate duplicate fields, bad indentation, missing final newline, exact/over-limit lines, total-size overflow, and out-of-root scopes. Document the supported YAML subset and keep tests bounded and reproducible.
 
 Do not replace the parser with unrestricted YAML or allocate attacker-sized lines. Acceptance means repeatable seeds, no crash/hang, documented accepted/rejected behavior, and tested input limits.
 
