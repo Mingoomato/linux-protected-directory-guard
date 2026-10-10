@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Guard decision v1",
   "type": "object",
-  "required": ["schema_version", "policy_revision", "operation", "source_api", "decision", "enforced", "coverage"],
+  "required": ["schema_version", "id", "policy_revision", "operation", "source_api", "decision", "enforced", "hook_verified", "coverage", "reason_code"],
   "properties": {
     "schema_version": {"const": "guard_decision.v1"},
     "policy_revision": {"type": "string"},
@@ -11,7 +11,26 @@
     "decision": {"enum": ["allow", "deny", "unknown"]},
     "enforced": {"type": "boolean"},
     "hook_verified": {"type": "boolean"},
-    "coverage": {"enum": ["audit_only", "unsupported", "degraded"]}
+    "id": {"type": "string"},
+    "policy_id": {"type": "string"},
+    "reason_code": {"type": "string"},
+    "pid_source": {"type": "string"},
+    "actor_attribution": {"type": "string"},
+    "pid": {"type": ["integer", "null"]},
+    "event_mask": {"type": "integer", "minimum": 0},
+    "scope_identity": {
+      "type": "object",
+      "properties": {
+        "path": {"type": "string"},
+        "device_major": {"type": "integer", "minimum": 0},
+        "device_minor": {"type": "integer", "minimum": 0},
+        "inode": {"type": "integer", "minimum": 0},
+        "file_identity_source": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "errno": {"type": ["integer", "null"]},
+    "coverage": {"enum": ["audit_only", "unsupported", "degraded", "gap"]}
   },
   "additionalProperties": true
 }

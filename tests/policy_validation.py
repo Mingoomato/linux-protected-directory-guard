@@ -62,4 +62,12 @@ decision = subprocess.run([
 ], check=True, capture_output=True, text=True)
 assert json.loads(decision.stdout)["reason_code"] == "deny-secret-write"
 
+for invalid_duration in ("abc", "-1", "12s", "999999999999999999999999"):
+    result = subprocess.run([
+        str(binary), "audit", "--root", str(lab_root), "--policy", str(base_path),
+        "--events", str(work / "must-not-open.ndjson"), "--duration", invalid_duration,
+    ], capture_output=True, text=True)
+    assert result.returncode == 2, (invalid_duration, result.returncode, result.stdout, result.stderr)
+    assert "PDG_INVALID_ARGUMENT" in result.stderr, (invalid_duration, result.stderr)
+
 print("PDG policy validation smoke: PASS")

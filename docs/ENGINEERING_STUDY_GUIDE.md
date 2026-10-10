@@ -1,64 +1,67 @@
 # Engineering Study Guide — Linux Protected Directory Guard
 
-## Learning objective and implementation status
+## 한국어
 
-This project teaches policy validation, policy explanation, and audit-only filesystem observation. It deliberately keeps policy evaluation separate from enforcement: a displayed `deny` is a policy result, not evidence that Linux blocked an operation. The build always returns an explicit unsupported result for `enforce`.
+### 학습 목표와 상태
 
-The Release build and unprivileged policy smoke test passed on the current Linux host; the separate ASan/UBSan smoke run is recorded as passed. New parser cases cover repeated fields, duplicate IDs/roots, canonical broad-root aliases, overlong lines, cumulative-byte limits, conflicting overlapping actions, and most-specific same-action scope selection. Privileged fanotify audit, mount marking, BPF LSM checks, VM scope isolation, parser fuzzing, and performance tests remain unverified. The current parser and audit backend are a partial SRS-03 implementation. Some SRS wording permits an audit-only release when enforcement mode is unsupported, but this does not establish hook coverage or runtime verification.
+이 프로젝트는 좁은 정책 언어를 안전하게 파싱하고, 규칙을 설명하며, fanotify 알림을 차단과 혼동하지 않고 기록하는 과정을 학습합니다. 현재 구현은 audit-only 부분 구현입니다. GCC Release CTest 2/2, Clang ASan/UBSan CTest 2/2, 정적 분석과 비특권 정책 회귀가 통과했습니다. 실제 fanotify mount mark·실이벤트, queue overflow, privileged VM, BPF hook 및 성능 게이트는 미검증입니다. 자동 테스트 통과는 SRS 전체 구현이나 학습자의 개인 숙련 증거가 아닙니다.
 
-## Why each subsystem exists
+### 중요한 하위 시스템이 존재하는 이유
 
-| Subsystem | Why it exists | Main implementation |
+| 하위 시스템 | 존재 이유 | 주요 코드 |
 |---|---|---|
-| Narrow YAML parser | Makes the accepted policy language small enough to inspect and rejects unknown syntax rather than guessing. | `parse_policy`, `trim`, `copy_value` |
-| Root/scope validation | Prevents broad roots and requires rule scopes to remain under an explicitly declared root. | `safe_scope`, `path_within` |
-| Deterministic policy evaluator | Lets an operator inspect allow/deny reasoning without claiming the action was enforced. | `evaluate`, `cmd_explain` |
-| Host capability probe | Reports whether a basic fanotify group can be created and whether BPF LSM appears in active LSMs. | `cmd_doctor` |
-| Audit-only fanotify observer | Demonstrates kernel notification records without permission-response events. | `cmd_audit` |
-| Decision journal | Preserves policy revision, event mask, path and attribution label for later inspection. | `json_escape`, `cmd_audit` |
+| 제한된 정책 파서 | 미지의 YAML 기능을 추측하지 않고, 입력량과 문법을 제한 | `parse_policy`, `read_policy_line` |
+| 경로/범위 검증 | 절대 경로를 canonicalize하고 광범위 root 및 범위 충돌을 거부 | `safe_scope`, `path_within`, `scopes_overlap` |
+| 결정적 정책 설명 | 규칙 우선순위를 사람이 검사하되 실제 kernel 차단과 구분 | `evaluate`, `cmd_explain` |
+| capability 진단 | fanotify group 생성 및 활성 LSM 목록을 제한된 의미로 보고 | `cmd_doctor` |
+| 감사 이벤트 수집 | 알림 event를 기록하되 permission response는 보내지 않음 | `cmd_audit`, `fanotify_records.h` |
+| JSONL 결정 저널 | 정책 revision, 이유, hook, path와 device/inode identity, actor 출처를 남김 | `json_escape`, `write_all`, `cmd_audit` |
 
-## Data and control flow
+### 데이터 및 제어 흐름
 
-1. `main` selects `doctor`, `policy`, `status`, `audit`, `enforce`, or `disable`.
-2. Commands using a policy call `parse_policy`. The parser opens with `O_NOFOLLOW`, reads into a fixed line buffer and enforces a total-byte limit, rejects repeated/unknown fields and unsupported indentation, requires unique rule IDs and non-overlapping roots, canonicalizes roots/scopes, and verifies each rule scope is within one declared root. Conflicting actions on overlapping scopes fail validation.
-3. `policy explain` canonicalizes the requested path, checks it is inside a protected root, validates the operation, and calls `evaluate`. The result includes `policy_revision`, action, `enforced:false`, `hook_verified:false`, and `coverage:audit_only`.
-4. `audit` requires an exact declared root. It calls `fanotify_init(FAN_CLASS_NOTIF | FAN_NONBLOCK)` and marks the containing mount for `FAN_OPEN` and `FAN_CLOSE_WRITE` notifications. Because a mount mark is wider than the configured subdirectory, each event FD is resolved through `/proc/self/fd/N`; only a path under the exact canonical root is logged.
-5. The audit loop checks metadata version and event length, writes one JSON line, closes each event FD, and stops on signal or duration. It never writes permission responses.
-6. `enforce` is an explicit unsupported path. `disable` reports that no persistent hook exists in this build.
+1. `main`이 명령을 고릅니다. 정책이 필요한 명령은 고정 크기 `struct policy`에 `parse_policy` 결과를 먼저 완성합니다.
+2. 파서는 `open(O_NOFOLLOW)`로 policy 파일의 최종 symlink를 거부하고, `MAX_LINE`과 `MAX_POLICY_BYTES`를 적용합니다. 중복/알 수 없는 키, 잘못된 들여쓰기, 중복 ID/root, 모호한 범위를 거부합니다. 지원하는 것은 의도적으로 작은 YAML subset입니다.
+3. root와 rule scope는 `realpath`로 정규화되고 broad root가 다시 검사됩니다. 각 rule은 선언된 root 아래 있어야 합니다. 충돌 action은 거부하며, 유효한 동일 action 중첩 범위는 가장 구체적인 scope가 선택됩니다.
+4. `policy explain`은 입력 경로와 operation을 검사하고 정책 결과를 `guard_decision.v1` JSON으로 씁니다. `enforced:false`, `hook_verified:false`, `coverage:audit_only`가 이 결과가 설명에 불과함을 나타냅니다.
+5. `audit`는 선택 root가 policy root와 정확히 일치하는지 확인한 뒤 `fanotify_init(FAN_CLASS_NOTIF)`와 `fanotify_mark(FAN_MARK_MOUNT)`를 호출합니다. mount mark가 더 넓을 수 있어 event FD의 `/proc/self/fd/N` 경로를 root 아래인지 필터링합니다.
+6. metadata version/length를 검증하고, event FD에서 `fstat`한 device major/minor와 inode를 pathname과 별도로 기록합니다. 제공된 PID는 `fanotify_event_metadata.pid` 출처와 함께 기록하고 검증된 장기 프로세스 신원으로 취급하지 않습니다.
+7. event FD와 log FD는 모든 정상/오류 경로에서 닫습니다. queue overflow, metadata 오류, path/read/poll/write 실패는 coverage gap/degraded로 처리하고 0이 아닌 종료를 반환합니다. 종료 신호나 지정 시간이 끝나면 종료 이유를 기록합니다.
+8. `enforce`는 항상 `PDG_UNSUPPORTED_ENFORCEMENT`를 반환합니다. BPF LSM은 진단만 하며 program을 load하지 않습니다.
 
-## Resource ownership and concurrency
+### Linux 인터페이스, 소유권 및 concurrency
 
-- The `policy` object is stack-owned by `main`; root/rule arrays are fixed-size and need no heap cleanup.
-- `parse_policy` owns the FD/`FILE*` and a fixed-size line buffer; `fclose` closes the stream and line input cannot allocate based on an untrusted line length.
-- `cmd_audit` owns the fanotify FD and event-log FD. For every `meta->fd >= 0`, the code must close the notification FD even when path resolution fails or the event is filtered. The current loop does so in its expected paths.
-- `readlink` returns a byte count; code appends NUL before string operations. Output buffers are fixed and event serialization checks the final length.
-- The audit loop is single-threaded; signal handling only sets a `sig_atomic_t` flag. Kernel event queue pressure and a slow log write can still make observations incomplete.
-- The policy is parsed once per process. Hot reload and atomic policy revision swaps are not implemented.
+- 사용 인터페이스: `open`, `fdopen`, `fgetc`, `realpath`, `fanotify_init`, `fanotify_mark`, `poll`, `read`, `readlink`, `fstat`, `fchmod`, `write`, `close`, `/proc/self/fd`, `/sys/kernel/security/lsm`.
+- `policy`와 고정 입력 버퍼는 호출 스택이 소유합니다. `FILE*`는 `fclose`가 underlying fd까지 닫습니다.
+- `cmd_audit`는 fanotify group FD와 journal FD를 소유합니다. 각 `meta->fd`는 수신 프로그램이 닫아야 하는 event FD입니다. `write_all`은 부분 write와 `EINTR`를 처리합니다.
+- 버퍼는 metadata 구조체에 맞춰 정렬하고 `event_len`, `metadata_len`, 남은 read 길이를 교차 검증합니다. 파서와 event buffer는 입력 길이에 따라 동적 확장하지 않습니다.
+- event loop는 단일 스레드입니다. signal handler는 `sig_atomic_t` 플래그만 세우고 정리/저널 작성은 일반 흐름에서 합니다. 동시 reload나 policy swap은 없습니다.
 
-## Security assumptions and failure modes
+### 보안 가정과 실패 양상
 
-Policy text and CLI paths are untrusted. The parser has byte/line/root/rule bounds, rejects tabs, repeated/unknown fields, and unsupported indentation, and restricts scope. Canonicalization checks the resolved broad-root path, not only the original spelling. A path can still be renamed after the check. The YAML subset does not provide full YAML semantics or robust quoting.
+정책 파일, 경로, CLI 인수는 불신 입력입니다. 제한된 YAML 파서는 full YAML이 아니며 quoted scalar/alias/tag를 지원하지 않습니다. `realpath` 이후 경로가 바뀔 수 있고 문자열 필터만으로 rename, hardlink, bind mount, mount namespace 및 inode 재사용을 해결하지 못합니다. 로그는 symlink를 따르지 않고 현재 UID 소유 regular file만 받아 mode `0600`을 적용합니다. JSON path 출력은 valid UTF-8을 보존하고 quote/backslash/control 및 잘못된 UTF-8 바이트를 escape합니다.
 
-fanotify permission to create a group and permission to mark a mount are separate checks. The observer uses `FAN_CLASS_NOTIF`, not a permission-event class, so it cannot block an open. Mount-wide observation is filtered after the event; event loss, queue overflow, unsupported filesystems, inaccessible `/proc/self/fd`, path renames, and output errors must not be interpreted as complete audit coverage. The current implementation does not expose all such failures as a durable degraded status and does not test them on a privileged VM.
+fanotify group 생성과 mount mark는 별도 capability/support 점검입니다. `FAN_CLASS_NOTIF`는 요청을 막지 않습니다. mount queue overflow는 관측 누락을 뜻하므로 gap 기록 후 degraded 종료합니다. `/proc/self/fd` 접근 불가, event FD가 없는 비-overflow event, 잘린 metadata, log 저장 실패, poll/read 오류도 성공적인 완전 수집으로 보고하지 않습니다. 아직 이 오류 경로를 실제 privileged VM에서 주입하지 않았습니다.
 
-BPF LSM is only diagnosed through `/sys/kernel/security/lsm`; no BPF program is loaded. The active-LSM list is not a probe of every hook's attachability or enforcement semantics.
+fanotify PID는 event metadata에 들어온 PID 관측값일 뿐이고 UID, process start time, pidfd를 저장하지 않습니다. BPF가 active LSM 목록에 있어도 특정 hook을 붙일 수 있다는 뜻은 아닙니다. 이 버전은 root attacker 방어, 모든 파일 변경 통제, mmap/kernel I/O/원격 변경 관측을 약속하지 않습니다.
 
-## Alternative implementations
+### 대안과 공식 문서
 
-- **fanotify permission events** can answer an access request, but add fail-open/fail-closed, timeout, queue-stall, privilege, and filesystem-support decisions. One event class cannot guarantee complete write/rename/unlink protection.
-- **BPF LSM** can hook selected kernel security operations, but requires supported kernel config, BTF/attachment support, active LSM integration, verifier-safe code, and a tested operation matrix.
-- **Landlock** can constrain a process's own future filesystem access, but it is not a general policy daemon that blocks arbitrary processes system-wide.
-- **Audit-only userspace explanation** is portable and safe for learning but cannot enforce policy.
-- **Mount mark vs directory mark** trades broader observation coverage for tighter scope; mount marks require post-filtering and may expose metadata for unrelated paths to the process.
+- fanotify permission event는 요청 처리/응답을 요구하므로 fail-open/closed, timeout, queue stall, filesystem 지원을 설계해야 합니다. 현재 버전에서 사용하지 않습니다.
+- BPF LSM은 특정 커널 hook 범위에 한정되며 CONFIG/BTF/active LSM/attach 가능성과 격리 VM별 검증이 필요합니다.
+- Landlock은 보통 호출 프로세스의 이후 접근을 제한하는 sandbox 인터페이스이지, 임의의 모든 프로세스를 제어하는 daemon 대체물이 아닙니다.
+- audit-only와 policy explanation은 안전한 학습 표면이지만 차단 기능은 아닙니다.
+- 공식/기술 참고: [Linux kernel fanotify guide](https://docs.kernel.org/6.15/admin-guide/filesystem-monitoring.html), [kernel procfs guide](https://docs.kernel.org/filesystems/proc.html), [`fanotify(7)`](https://man7.org/linux/man-pages/man7/fanotify.7.html), [`fanotify_init(2)`](https://man7.org/linux/man-pages/man2/fanotify_init.2.html), [`fanotify_mark(2)`](https://man7.org/linux/man-pages/man2/fanotify_mark.2.html), [`capabilities(7)`](https://man7.org/linux/man-pages/man7/capabilities.7.html), [BPF LSM](https://docs.kernel.org/bpf/prog_lsm.html), [Linux LSM](https://docs.kernel.org/admin-guide/LSM/index.html), [Landlock](https://docs.kernel.org/userspace-api/landlock.html).
 
-## Study route
+## English
 
-Read `docs/HOOK_COVERAGE.md` before reading `cmd_audit`. Compare `policy explain` with a real kernel event and explain why their `decision` fields have different evidentiary meaning. Then study `docs/CODE_WALKTHROUGH.md`, `docs/LINUX_INTERNALS_EXPLAINED.md`, and attempt one unsolved exercise.
+This project teaches bounded policy parsing, deterministic explanation, and audit-only fanotify observation without confusing a policy result with kernel enforcement. It remains a partial audit-only implementation. GCC Release CTest 2/2, Clang ASan/UBSan CTest 2/2, static analysis, and unprivileged policy regressions passed. Live fanotify mount marks/events, overflow injection, privileged VM behavior, BPF hooks, and performance gates remain unverified. Automated tests do not prove full SRS completion or the owner's personal mastery.
 
-## Official references
+The policy parser uses a fixed-size `struct policy`, `open(O_NOFOLLOW)`, bounded line and total-input sizes, explicit fields, canonical roots, and conflict checks. `evaluate` chooses the most-specific valid same-action scope. `policy explain` returns a policy result with `enforced:false`, `hook_verified:false`, and `coverage:audit_only`.
 
-- [`fanotify(7)`](https://man7.org/linux/man-pages/man7/fanotify.7.html), [`fanotify_init(2)`](https://man7.org/linux/man-pages/man2/fanotify_init.2.html), [`fanotify_mark(2)`](https://man7.org/linux/man-pages/man2/fanotify_mark.2.html)
-- [Linux BPF LSM documentation](https://docs.kernel.org/bpf/prog_lsm.html) and [Linux Security Module usage](https://docs.kernel.org/admin-guide/LSM/index.html)
-- [`capabilities(7)`](https://man7.org/linux/man-pages/man7/capabilities.7.html)
-- [Landlock documentation](https://docs.kernel.org/userspace-api/landlock.html)
-- [Linux `procfs` documentation](https://docs.kernel.org/filesystems/proc.html)
+The observer creates a `FAN_CLASS_NOTIF` group, marks the containing mount, reads packed metadata, validates version and lengths against the available bytes, resolves each event FD through `/proc/self/fd`, and filters to the configured canonical root. `fstat` device major/minor and inode are recorded separately from the path. The PID field is labeled with its fanotify metadata source, not as a durable process identity. Permission responses are never sent.
+
+The policy and parser buffers are stack-owned. The audit function owns the fanotify FD, log FD, read buffer, and each event FD; every valid event FD is closed. The event loop is single-threaded; signals only set a `sig_atomic_t` flag. `write_all` handles partial writes and `EINTR`. A no-follow owner-checked regular journal is restricted to mode `0600`; JSON output preserves valid UTF-8 and escapes invalid pathname bytes.
+
+Malformed metadata, queue overflow, missing event FDs, path resolution errors, poll/read errors, and journal failures produce explicit degraded/unsupported results instead of a healthy-success claim. `realpath` and path filtering do not solve rename races, hard links, bind mounts, namespace identity, or inode reuse. fanotify group creation is not proof that mount marking or a particular filesystem/hook is supported. Active BPF LSM is not proof a program can attach. `enforce` always returns `PDG_UNSUPPORTED_ENFORCEMENT`.
+
+Alternatives include fanotify permission events, BPF LSM, Landlock, and audit-only explanation; each has a different operation and failure boundary. Official references are linked above and in `docs/LINUX_INTERNALS_EXPLAINED.md`.

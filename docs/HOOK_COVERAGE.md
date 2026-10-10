@@ -2,8 +2,10 @@
 
 | Operation | Current backend | Decision data | Enforced |
 |---|---|---|---|
-| Open notification | fanotify FAN_OPEN | observed path, event mask, PID if supplied; policy decision remains unknown | No |
-| Close after write | fanotify FAN_CLOSE_WRITE | observed path and event mask | No |
+| Open notification | fanotify FAN_OPEN | path, `st_dev` major/minor, inode, event mask, PID value and PID source if supplied; policy decision remains unknown | No |
+| Close after write | fanotify FAN_CLOSE_WRITE | path, device/inode identity, and event mask | No |
+| Queue overflow | fanotify `FAN_Q_OVERFLOW` | explicit `coverage:gap`, unknown actor, and overflow reason; audit exits degraded | No |
+| Monitor stop | signal or requested duration | policy revision and explicit stop reason in the journal | No |
 | Open permission | not implemented | unsupported | No |
 | Write authorization | not implemented | unsupported | No |
 | Rename/unlink authorization | not implemented | unsupported | No |

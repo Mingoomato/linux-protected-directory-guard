@@ -1,19 +1,25 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <linux/fanotify.h>
 #include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stdalign.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/fanotify.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "fanotify_records.h"
 
 #define MAX_POLICY_BYTES (1024U * 1024U)
 #define MAX_ROOTS 64
@@ -282,34 +288,109 @@ static int evaluate(const struct policy *p, const char *path, const char *op,
     return 0;
 }
 
+static int json_escape(const char *s, char *out, size_t cap);
+
 static const char *opt(int argc, char **argv, const char *key, const char *fallback) {
     for (int i = 1; i + 1 < argc; ++i) if (!strcmp(argv[i], key)) return argv[i+1];
     return fallback;
 }
 
 static int cmd_explain(const struct policy *p, const char *path_arg, const char *op) {
-    char path[PATH_MAX];
+    char path[PATH_MAX], escaped_path[PATH_MAX * 6U];
     if (safe_scope(path_arg, path) != 0) { perror("dirguardctl: path"); return 2; }
+    if (json_escape(path, escaped_path, sizeof(escaped_path)) != 0) {
+        fprintf(stderr, "PDG_INVALID_PATH: cannot encode path for JSON\n"); return 2;
+    }
     if (!valid_op(op)) { fprintf(stderr, "invalid operation\n"); return 2; }
     bool in_root = false;
     for (size_t i = 0; i < p->root_count; ++i) if (path_within(p->roots[i], path)) in_root = true;
     if (!in_root) { fprintf(stderr, "PDG_INVALID_POLICY: path outside protected roots\n"); return 2; }
     char action[16], id[128];
     evaluate(p, path, op, action, id);
-    printf("{\"schema_version\":\"guard_decision.v1\",\"policy_revision\":\"%s\","
+    const char *reason = id[0] ? id : "DEFAULT_ACTION";
+    printf("{\"schema_version\":\"guard_decision.v1\",\"id\":\"explain-%s-%s\","
+           "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
            "\"operation\":\"%s\",\"source_api\":\"policy_explain\",\"decision\":\"%s\","
-           "\"enforced\":false,\"hook_verified\":false,\"coverage\":\"audit_only\",\"reason_code\":\"%s\"}\n",
-           p->revision, op, action, id[0] ? id : "DEFAULT_ACTION");
+           "\"enforced\":false,\"hook_verified\":false,\"coverage\":\"audit_only\","
+           "\"reason_code\":\"%s\",\"scope_identity\":{\"path\":\"%s\"},"
+           "\"actor_attribution\":\"unknown\",\"pid_source\":\"unknown\",\"errno\":null}\n",
+           p->revision, reason, p->revision, p->revision, op, action, reason, escaped_path);
     return 0;
 }
 
-static void json_escape(const char *s, char *out, size_t cap) {
+/* POSIX paths may contain arbitrary bytes. Preserve valid UTF-8 and encode
+ * each invalid byte as U+00XX so every emitted record remains valid JSON. */
+static int json_escape(const char *s, char *out, size_t cap) {
     size_t n = 0;
-    for (const unsigned char *p = (const unsigned char *)s; *p && n + 2U < cap; ++p) {
-        if (*p == '"' || *p == '\\') { out[n++] = '\\'; out[n++] = (char)*p; }
-        else if (*p >= 0x20U) out[n++] = (char)*p;
+    static const char hex[] = "0123456789abcdef";
+    for (const unsigned char *p = (const unsigned char *)s; *p; ++p) {
+        if (*p == '"' || *p == '\\') {
+            if (n + 2U >= cap) { errno = ENOSPC; return -1; }
+            out[n++] = '\\'; out[n++] = (char)*p;
+        } else if (*p < 0x20U) {
+            if (n + 6U >= cap) { errno = ENOSPC; return -1; }
+            out[n++] = '\\'; out[n++] = 'u'; out[n++] = '0'; out[n++] = '0';
+            out[n++] = hex[*p >> 4]; out[n++] = hex[*p & 0x0fU];
+        } else if (*p >= 0x7fU) {
+            size_t utf8_len = 0;
+            unsigned char c = *p;
+            if (c >= 0xc2U && c <= 0xdfU && (p[1] & 0xc0U) == 0x80U) utf8_len = 2U;
+            else if (c == 0xe0U && p[1] >= 0xa0U && p[1] <= 0xbfU &&
+                     (p[2] & 0xc0U) == 0x80U) utf8_len = 3U;
+            else if (((c >= 0xe1U && c <= 0xecU) || (c >= 0xeeU && c <= 0xefU)) &&
+                     (p[1] & 0xc0U) == 0x80U && (p[2] & 0xc0U) == 0x80U) utf8_len = 3U;
+            else if (c == 0xedU && p[1] >= 0x80U && p[1] <= 0x9fU &&
+                     (p[2] & 0xc0U) == 0x80U) utf8_len = 3U;
+            else if (c == 0xf0U && p[1] >= 0x90U && p[1] <= 0xbfU &&
+                     (p[2] & 0xc0U) == 0x80U && (p[3] & 0xc0U) == 0x80U) utf8_len = 4U;
+            else if (c >= 0xf1U && c <= 0xf3U && (p[1] & 0xc0U) == 0x80U &&
+                     (p[2] & 0xc0U) == 0x80U && (p[3] & 0xc0U) == 0x80U) utf8_len = 4U;
+            else if (c == 0xf4U && p[1] >= 0x80U && p[1] <= 0x8fU &&
+                     (p[2] & 0xc0U) == 0x80U && (p[3] & 0xc0U) == 0x80U) utf8_len = 4U;
+            if (utf8_len != 0U) {
+                if (n + utf8_len >= cap) { errno = ENOSPC; return -1; }
+                memcpy(out + n, p, utf8_len);
+                n += utf8_len;
+                p += utf8_len - 1U;
+            } else {
+                if (n + 6U >= cap) { errno = ENOSPC; return -1; }
+                out[n++] = '\\'; out[n++] = 'u'; out[n++] = '0'; out[n++] = '0';
+                out[n++] = hex[*p >> 4]; out[n++] = hex[*p & 0x0fU];
+            }
+        } else {
+            if (n + 1U >= cap) { errno = ENOSPC; return -1; }
+            out[n++] = (char)*p;
+        }
     }
+    if (n >= cap) { errno = ENOSPC; return -1; }
     out[n] = '\0';
+    return 0;
+}
+
+static int write_all(int fd, const char *buffer, size_t length) {
+    size_t written = 0;
+    while (written < length) {
+        ssize_t n = write(fd, buffer + written, length - written);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) { if (n == 0) errno = EIO; return -1; }
+        written += (size_t)n;
+    }
+    return 0;
+}
+
+static int parse_duration(const char *text, int *seconds) {
+    if (!text || !*text) { errno = EINVAL; return -1; }
+    for (const unsigned char *p = (const unsigned char *)text; *p; ++p)
+        if (*p < '0' || *p > '9') { errno = EINVAL; return -1; }
+    errno = 0;
+    char *end = NULL;
+    long value = strtol(text, &end, 10);
+    if (errno || !end || *end || value < 0 || value > INT_MAX) {
+        errno = ERANGE;
+        return -1;
+    }
+    *seconds = (int)value;
+    return 0;
 }
 
 static int cmd_audit(const struct policy *p, const char *root_arg, const char *events_path,
@@ -322,69 +403,186 @@ static int cmd_audit(const struct policy *p, const char *root_arg, const char *e
     int fan = fanotify_init(FAN_CLOEXEC | FAN_NONBLOCK | FAN_CLASS_NOTIF,
                             O_RDONLY | O_LARGEFILE | O_CLOEXEC);
     if (fan < 0) {
-        fprintf(stderr, "{\"error\":\"PDG_INSUFFICIENT_PRIVILEGE\",\"coverage\":\"unsupported\",\"errno\":%d}\n", errno);
+        int saved = errno;
+        const char *code = (saved == EPERM || saved == EACCES) ?
+            "PDG_INSUFFICIENT_PRIVILEGE" : "PDG_UNSUPPORTED_HOOK";
+        fprintf(stderr, "{\"error\":\"%s\",\"coverage\":\"unsupported\","
+                        "\"hook_verified\":false,\"errno\":%d}\n", code, saved);
         return 3;
     }
     uint64_t mask = FAN_OPEN | FAN_CLOSE_WRITE | FAN_EVENT_ON_CHILD;
     if (fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_MOUNT, mask, AT_FDCWD, root) != 0) {
         int saved = errno; close(fan);
-        fprintf(stderr, "{\"error\":\"PDG_UNSUPPORTED_HOOK\",\"coverage\":\"unsupported\",\"errno\":%d}\n", saved);
+        const char *code = (saved == EPERM || saved == EACCES) ?
+            "PDG_INSUFFICIENT_PRIVILEGE" : "PDG_UNSUPPORTED_HOOK";
+        fprintf(stderr, "{\"error\":\"%s\",\"coverage\":\"unsupported\","
+                        "\"hook_verified\":false,\"errno\":%d}\n", code, saved);
         return 3;
     }
-    int logfd = open(events_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_NOFOLLOW, 0600);
-    if (logfd < 0) { close(fan); perror("open event log"); return 1; }
+    int logfd = open(events_path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC |
+                     O_NOFOLLOW | O_NONBLOCK, 0600);
+    if (logfd < 0) {
+        int saved = errno; close(fan);
+        fprintf(stderr, "{\"error\":\"PDG_INVALID_EVENT_LOG\",\"coverage\":\"unsupported\",\"errno\":%d}\n", saved);
+        return 1;
+    }
+    struct stat log_stat;
+    int log_error = 0;
+    if (fstat(logfd, &log_stat) != 0) log_error = errno;
+    else if (!S_ISREG(log_stat.st_mode) || log_stat.st_uid != geteuid()) log_error = EPERM;
+    else if (fchmod(logfd, 0600) != 0) log_error = errno;
+    if (log_error != 0) {
+        close(logfd); close(fan);
+        fprintf(stderr, "{\"error\":\"PDG_INVALID_EVENT_LOG\",\"coverage\":\"unsupported\",\"errno\":%d}\n", log_error);
+        return 1;
+    }
     signal(SIGINT, stop_signal); signal(SIGTERM, stop_signal);
     time_t started = time(NULL);
-    unsigned char buf[65536];
-    printf("{\"mode\":\"audit_only\",\"enforcement\":false,\"root\":\"%s\"}\n", root);
+    alignas(struct fanotify_event_metadata) unsigned char buf[65536];
+    char escaped_root[PATH_MAX * 6U];
+    if (json_escape(root, escaped_root, sizeof(escaped_root)) != 0) {
+        close(logfd); close(fan); return 1;
+    }
+    printf("{\"mode\":\"audit_only\",\"enforcement\":false,\"coverage\":\"audit_only\",\"root\":\"%s\"}\n", escaped_root);
+    int audit_rc = 0;
+    int failure_errno = 0;
+    uint64_t event_sequence = 0;
+    const char *failure_reason = "MONITOR_STOPPED";
     while (!stopping) {
         if (duration_sec > 0 && time(NULL) - started >= duration_sec) break;
         struct pollfd pfd = { .fd = fan, .events = POLLIN };
         int ready = poll(&pfd, 1, 500);
         if (ready < 0 && errno == EINTR) continue;
-        if (ready < 0) break;
+        if (ready < 0) { audit_rc = 1; failure_reason = "POLL_FAILED"; failure_errno = errno; break; }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            audit_rc = 1; failure_reason = "FANOTIFY_GROUP_FAILED"; failure_errno = EIO; break;
+        }
         if (!ready) continue;
         ssize_t n = read(fan, buf, sizeof(buf));
         if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
-        if (n < 0) break;
-        for (size_t off = 0; off + sizeof(struct fanotify_event_metadata) <= (size_t)n;) {
+        if (n <= 0) {
+            audit_rc = 1; failure_reason = "FANOTIFY_READ_FAILED";
+            failure_errno = n < 0 ? errno : EPIPE;
+            break;
+        }
+        for (size_t off = 0; off < (size_t)n;) {
+            size_t remaining = (size_t)n - off;
             struct fanotify_event_metadata *meta = (struct fanotify_event_metadata *)(void *)(buf + off);
-            if (meta->vers != FANOTIFY_METADATA_VERSION || meta->event_len < sizeof(*meta)) {
-                stopping = 1; break;
+            if (!metadata_record_valid(meta, remaining)) {
+                audit_rc = 1; failure_reason = "INVALID_FANOTIFY_METADATA";
+                failure_errno = errno; stopping = 1; break;
+            }
+            if (meta->mask & FAN_Q_OVERFLOW) {
+                char line[512];
+                int len = snprintf(line, sizeof(line),
+                    "{\"schema_version\":\"guard_decision.v1\",\"id\":\"pdg-%s-%" PRIu64 "\","
+                    "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
+                    "\"operation\":\"queue_overflow\",\"source_api\":\"fanotify\","
+                    "\"decision\":\"unknown\",\"reason_code\":\"FANOTIFY_QUEUE_OVERFLOW\","
+                    "\"enforced\":false,\"hook_verified\":true,\"coverage\":\"gap\","
+                    "\"actor_attribution\":\"unknown\",\"pid_source\":\"unknown\",\"errno\":null}\n",
+                    p->revision, ++event_sequence, p->revision, p->revision);
+                int record_error = (len < 0 || (size_t)len >= sizeof(line)) ? EOVERFLOW :
+                    (write_all(logfd, line, (size_t)len) != 0 ? errno : 0);
+                if (record_error != 0) {
+                    audit_rc = 1; failure_reason = "EVENT_LOG_WRITE_FAILED";
+                    failure_errno = record_error;
+                } else {
+                    audit_rc = 1; failure_reason = "FANOTIFY_QUEUE_OVERFLOW"; failure_errno = ENOBUFS;
+                }
+                stopping = 1;
+                break;
             }
             if (meta->fd >= 0) {
-                char fdpath[64], resolved[PATH_MAX], escaped[PATH_MAX * 2U];
+                char fdpath[64], resolved[PATH_MAX], escaped[PATH_MAX * 6U];
                 snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", meta->fd);
-                    ssize_t size = readlink(fdpath, resolved, sizeof(resolved) - 1U);
-                    if (size >= 0) {
-                        resolved[size] = '\0';
+                ssize_t size = readlink(fdpath, resolved, sizeof(resolved));
+                if (size >= 0 && (size_t)size < sizeof(resolved)) {
+                    resolved[size] = '\0';
                     if (!path_within(root, resolved)) {
                         close(meta->fd);
                         off += meta->event_len;
                         continue;
                     }
-                    json_escape(resolved, escaped, sizeof(escaped));
-                    char line[PATH_MAX * 2U + 512U];
-                    int len = snprintf(line, sizeof(line),
-                        "{\"schema_version\":\"guard_decision.v1\",\"policy_revision\":\"%s\","
-                        "\"operation\":\"open_observed\",\"source_api\":\"fanotify\","
-                        "\"decision\":\"unknown\",\"reason_code\":\"AUDIT_ONLY\",\"enforced\":false,\"hook_verified\":false,"
-                        "\"scope_identity\":{\"path\":\"%s\"},\"actor_attribution\":\"%s\","
-                        "\"pid\":%d,\"event_mask\":%llu,\"coverage\":\"audit_only\"}\n",
-                        p->revision, escaped, meta->pid > 0 ? "kernel_observed" : "unknown",
-                        meta->pid, (unsigned long long)meta->mask);
-                    if (len > 0 && (size_t)len < sizeof(line)) {
-                        ssize_t wrote = write(logfd, line, (size_t)len);
-                        if (wrote != len) stopping = 1;
+                    struct stat event_stat;
+                    int metadata_error = 0;
+                    errno = 0;
+                    if (fstat(meta->fd, &event_stat) != 0) {
+                        metadata_error = errno;
+                        if (metadata_error == 0) metadata_error = EIO;
                     }
+                    else {
+                        errno = 0;
+                        if (json_escape(resolved, escaped, sizeof(escaped)) != 0) {
+                            metadata_error = errno;
+                            if (metadata_error == 0) metadata_error = EIO;
+                        }
+                    }
+                    if (metadata_error != 0) {
+                        close(meta->fd);
+                        audit_rc = 1; failure_reason = "EVENT_METADATA_UNAVAILABLE";
+                        failure_errno = metadata_error;
+                        stopping = 1; break;
+                    }
+                    char line[PATH_MAX * 6U + 1024U];
+                    int len = snprintf(line, sizeof(line),
+                        "{\"schema_version\":\"guard_decision.v1\",\"id\":\"pdg-%s-%" PRIu64 "\","
+                        "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
+                        "\"operation\":\"%s\",\"source_api\":\"fanotify\","
+                        "\"decision\":\"unknown\",\"reason_code\":\"AUDIT_ONLY\",\"enforced\":false,\"hook_verified\":true,"
+                        "\"scope_identity\":{\"path\":\"%s\",\"device_major\":%u,\"device_minor\":%u,\"inode\":%ju,\"file_identity_source\":\"fstat_event_fd\"},"
+                        "\"actor_attribution\":\"%s\",\"pid_source\":\"%s\","
+                        "\"pid\":%d,\"errno\":null,\"event_mask\":%llu,\"coverage\":\"audit_only\"}\n",
+                        p->revision, ++event_sequence, p->revision, p->revision,
+                        event_operation(meta->mask), escaped,
+                        major(event_stat.st_dev), minor(event_stat.st_dev), (uintmax_t)event_stat.st_ino,
+                        meta->pid > 0 ? "process_pid_observed" : "unknown",
+                        meta->pid > 0 ? "fanotify_event_metadata.pid" : "unknown",
+                        meta->pid, (unsigned long long)meta->mask);
+                    int record_error = (len <= 0 || (size_t)len >= sizeof(line)) ? EOVERFLOW :
+                        (write_all(logfd, line, (size_t)len) != 0 ? errno : 0);
+                    if (record_error != 0) {
+                        audit_rc = 1; failure_reason = "EVENT_LOG_WRITE_FAILED";
+                        failure_errno = record_error;
+                        stopping = 1;
+                    }
+                } else {
+                    audit_rc = 1; failure_reason = "EVENT_PATH_UNAVAILABLE";
+                    failure_errno = size < 0 ? errno : ENAMETOOLONG;
+                    stopping = 1;
                 }
                 close(meta->fd);
+            } else {
+                audit_rc = 1; failure_reason = "EVENT_WITHOUT_FILE_DESCRIPTOR";
+                failure_errno = EPROTO;
+                stopping = 1;
             }
             off += meta->event_len;
+            if (audit_rc != 0) break;
+        }
+    }
+    if (audit_rc == 0) {
+        char line[512];
+        const char *reason = stopping ? "STOPPED_BY_SIGNAL" : "DURATION_COMPLETE";
+        int len = snprintf(line, sizeof(line),
+            "{\"schema_version\":\"guard_decision.v1\",\"id\":\"pdg-%s-%" PRIu64 "\","
+            "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
+            "\"operation\":\"monitor_stopped\",\"source_api\":\"fanotify\","
+            "\"decision\":\"unknown\",\"reason_code\":\"%s\",\"enforced\":false,"
+            "\"hook_verified\":true,\"coverage\":\"audit_only\","
+            "\"actor_attribution\":\"unknown\",\"pid_source\":\"unknown\",\"errno\":null}\n",
+            p->revision, ++event_sequence, p->revision, p->revision, reason);
+        int record_error = (len <= 0 || (size_t)len >= sizeof(line)) ? EOVERFLOW :
+            (write_all(logfd, line, (size_t)len) != 0 ? errno : 0);
+        if (record_error != 0) {
+            audit_rc = 1; failure_reason = "EVENT_LOG_WRITE_FAILED";
+            failure_errno = record_error;
         }
     }
     close(logfd); close(fan);
-    return 0;
+    if (audit_rc != 0)
+        fprintf(stderr, "{\"error\":\"PDG_MONITOR_DEGRADED\",\"coverage\":\"degraded\",\"reason_code\":\"%s\",\"errno\":%d,\"enforced\":false}\n", failure_reason, failure_errno);
+    return audit_rc;
 }
 
 static int cmd_doctor(void) {
@@ -441,8 +639,11 @@ int main(int argc, char **argv) {
     } else if (!strcmp(argv[1], "audit")) {
         const char *root = opt(argc, argv, "--root", NULL);
         const char *events = opt(argc, argv, "--events", "./dirguard-events.ndjson");
-        int duration = atoi(opt(argc, argv, "--duration", "0"));
-        if (!root || duration < 0) { usage(); return 2; }
+        int duration = 0;
+        if (!root || parse_duration(opt(argc, argv, "--duration", "0"), &duration) != 0) {
+            fprintf(stderr, "PDG_INVALID_ARGUMENT: duration must be a non-negative integer\n");
+            return 2;
+        }
         return cmd_audit(&policy, root, events, duration);
     }
     usage(); return 2;
