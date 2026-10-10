@@ -24,7 +24,7 @@
 
 ### 4. Capability 진단 및 안전 명령
 
-`cmd_doctor`는 기본 fanotify group 생성을 시도하고 `/sys/kernel/security/lsm`을 읽어 `bpf` 표기가 있는지 확인합니다. mount mark, filesystem별 coverage, BPF hook attach를 검증하지 않습니다. `enforce`는 지원되지 않는 JSON 오류를 반환하며 `disable`은 영속 hook이 없다는 메시지만 냅니다.
+`cmd_doctor`는 기본 fanotify group 생성과 errno를 기록하고, `/sys/kernel/security/lsm`의 정확한 `bpf` token, `/boot/config-<uname.release>`의 `CONFIG_BPF_LSM`, kernel BTF 파일, PATH의 실행 가능한 `bpftool`을 확인합니다. JSON에는 preflight 상태와 `not_run_no_hook_selected` probe 결과를 포함합니다. 이 검사는 mount mark, filesystem별 coverage, BPF hook attach를 검증하지 않습니다. `enforce`는 지원되지 않는 JSON 오류를 반환하며 `disable`은 영속 hook이 없다는 메시지만 냅니다.
 
 ### 5. 소유권·실패 경로 확인
 
@@ -56,4 +56,4 @@ Queue overflow, malformed records, missing event FDs, path/read/poll/journal fai
 
 ### 4. Diagnostics and failure ownership
 
-`cmd_doctor` checks basic group creation and reads the active LSM list; it does not prove mount marking, filesystem coverage, or hook attachability. `enforce` is explicitly unsupported and `disable` has no persistent hook to remove. The stack policy is owned by `main`; the parser owns its stream; `cmd_audit` owns the fanotify and journal FDs, read buffer, and each returned event FD. Privileged runtime and injected failure cases remain unverified.
+`cmd_doctor` records basic group creation and errno, exact active-LSM token, `CONFIG_BPF_LSM` from `/boot/config-<uname.release>`, kernel BTF presence, executable `bpftool` availability, an aggregate preflight state, and the explicit `not_run_no_hook_selected` probe result. These read-only checks do not prove mount marking, filesystem coverage, or hook attachability. `enforce` is explicitly unsupported and `disable` has no persistent hook to remove. The stack policy is owned by `main`; the parser owns its stream; `cmd_audit` owns the fanotify and journal FDs, read buffer, and each returned event FD. Privileged runtime and injected failure cases remain unverified.

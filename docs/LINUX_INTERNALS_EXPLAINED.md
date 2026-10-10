@@ -24,9 +24,9 @@ fanotify가 제공한 유효한 `meta->fd`는 수신 프로그램이 소유합�
 
 ### 권한, filesystem 및 BPF LSM 진단
 
-group 생성 성공과 mount mark 성공은 별개의 capability/권한 및 filesystem 지원 단계입니다. `doctor`의 기본 group probe는 mount mark나 실 이벤트를 증명하지 않습니다. `FAN_MARK_MOUNT`가 지원되는지와 어떤 filesystem에서 이벤트가 오는지는 privileged VM에서 확인해야 합니다.
+group 생성 성공과 mount mark 성공은 별개의 capability/권한 및 filesystem 지원 단계입니다. `doctor`는 `fanotify_api_errno`와 mount probe를 분리해 기록하며, mount probe는 disposable privileged VM에서만 실행합니다. `FAN_MARK_MOUNT`가 지원되는지와 어떤 filesystem에서 이벤트가 오는지는 아직 검증하지 않았습니다.
 
-`/sys/kernel/security/lsm`에 `bpf`가 있어도 특정 BPF program이 verifier를 통과하거나 hook에 attach/작동한다는 뜻은 아닙니다. `CONFIG_BPF_LSM`, BTF, bpftool/probe 결과, hook signature 및 실제 positive/negative workload가 필요합니다. 이 저장소는 BPF를 load하지 않습니다.
+`doctor`는 `/boot/config-<uname.release>`에서 `CONFIG_BPF_LSM`, `/sys/kernel/security/lsm`에서 정확한 `bpf` token, `/sys/kernel/btf/vmlinux`, PATH에서 실행 가능한 `bpftool`을 확인합니다. 현재 호스트는 config enabled, LSM active, BTF present, bpftool unavailable로 preflight incomplete입니다. probe 결과는 `not_run_no_hook_selected`입니다. `bpf`가 활성 목록에 있어도 특정 program이 verifier를 통과하거나 hook에 attach/작동한다는 뜻은 아닙니다. hook signature와 실제 positive/negative workload 검증은 별도이며, 이 저장소는 BPF를 load하지 않습니다.
 
 ### 오류와 coverage 의미
 
@@ -36,7 +36,7 @@ fanotify group/mount mark 거부는 unsupported 또는 insufficient privilege입
 
 - [`fanotify(7)`](https://man7.org/linux/man-pages/man7/fanotify.7.html), [`fanotify_init(2)`](https://man7.org/linux/man-pages/man2/fanotify_init.2.html), [`fanotify_mark(2)`](https://man7.org/linux/man-pages/man2/fanotify_mark.2.html)
 - [Linux kernel fanotify guide](https://docs.kernel.org/6.15/admin-guide/filesystem-monitoring.html), [kernel procfs guide](https://docs.kernel.org/filesystems/proc.html)
-- [`poll(2)`](https://man7.org/linux/man-pages/man2/poll.2.html), [`read(2)`](https://man7.org/linux/man-pages/man2/read.2.html), [`fstat(2)`](https://man7.org/linux/man-pages/man2/stat.2.html), [`capabilities(7)`](https://man7.org/linux/man-pages/man7/capabilities.7.html)
+- [`poll(2)`](https://man7.org/linux/man-pages/man2/poll.2.html), [`read(2)`](https://man7.org/linux/man-pages/man2/read.2.html), [`fstat(2)`](https://man7.org/linux/man-pages/man2/stat.2.html), [`uname(2)`](https://man7.org/linux/man-pages/man2/uname.2.html), [`access(2)`](https://man7.org/linux/man-pages/man2/access.2.html), [`capabilities(7)`](https://man7.org/linux/man-pages/man7/capabilities.7.html)
 - [Linux BPF LSM](https://docs.kernel.org/bpf/prog_lsm.html), [Linux LSM usage](https://docs.kernel.org/admin-guide/LSM/index.html), [Landlock](https://docs.kernel.org/userspace-api/landlock.html), [procfs](https://docs.kernel.org/filesystems/proc.html)
 
 ## English
@@ -49,4 +49,4 @@ The journal records path separately from event-FD `fstat` device major/minor and
 
 The event loop checks metadata version, reserved fields, `event_len`, and `metadata_len` against bytes remaining after `read`. Valid event FDs are closed by the receiver on success, filtering, and error paths. `FAN_Q_OVERFLOW` means coverage was lost: the monitor records a `coverage:"gap"` reason and exits degraded. Poll/read/path/log failures likewise cannot be called a complete successful audit.
 
-Basic fanotify group creation does not prove mount-mark permission or filesystem event support. Seeing `bpf` in `/sys/kernel/security/lsm` does not prove a specific BPF hook is attachable or effective; `CONFIG_BPF_LSM`, BTF, tools, hook signatures, and workload tests matter. No BPF program is loaded here. See the Korean section for official references, also linked by system-call and kernel topic.
+`doctor` reports `CONFIG_BPF_LSM` from `/boot/config-<uname.release>`, an exact active-LSM token, `/sys/kernel/btf/vmlinux`, executable `bpftool` availability, an aggregate preflight state, and the explicit `not_run_no_hook_selected` probe result. The current host reported config enabled, BPF active, BTF present, bpftool absent, and preflight incomplete. Basic fanotify group creation still does not prove mount-mark permission or filesystem event support. No BPF program is loaded here. See the Korean section for official references, also linked by system-call and kernel topic.

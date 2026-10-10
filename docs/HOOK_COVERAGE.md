@@ -10,4 +10,6 @@
 | Write authorization | not implemented | unsupported | No |
 | Rename/unlink authorization | not implemented | unsupported | No |
 | mmap and kernel-internal I/O | not covered | coverage gap | No |
-| BPF LSM | diagnostic probe only | active-LSM indicator | No |
+| BPF LSM | read-only `doctor` preflight; no program loaded | active LSM, `CONFIG_BPF_LSM`, `/sys/kernel/btf/vmlinux`, `bpftool` availability, preflight status; hook probe is `not_run_no_hook_selected` | No |
+
+`doctor` may report an incomplete preflight when any kernel config, active-LSM, BTF, or tooling evidence is missing. A ready preflight still does not prove a specific hook is attachable; hook selection and privileged disposable-VM operation tests remain separate gates.

@@ -11,7 +11,9 @@ install(TARGETS dirguardctl RUNTIME DESTINATION bin)
 
 include(CTest)
 if(BUILD_TESTING)
-    add_test(NAME policy-audit-smoke COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.sh)
+    add_test(NAME policy-audit-smoke
+        COMMAND ${CMAKE_COMMAND} -E env "BIN_DIR=$<TARGET_FILE_DIR:dirguardctl>"
+                /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/smoke.sh)
     add_executable(fanotify_metadata_test tests/fanotify_metadata_test.c)
     target_compile_options(fanotify_metadata_test PRIVATE -Wall -Wextra -Wpedantic -Werror)
     add_test(NAME fanotify-metadata-validation COMMAND fanotify_metadata_test)

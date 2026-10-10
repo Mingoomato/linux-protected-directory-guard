@@ -24,6 +24,26 @@ rules:
 EOF
 
 "$bin" policy validate --file "$tmp/policy.yaml"
+set +e
+"$bin" doctor --json >"$tmp/doctor.json"
+doctor_rc=$?
+set -e
+[ "$doctor_rc" -eq 0 ] || [ "$doctor_rc" -eq 3 ]
+python3 - "$tmp/doctor.json" <<'PY'
+import json, sys
+doctor = json.load(open(sys.argv[1], encoding="utf-8"))
+assert isinstance(doctor["fanotify_api_available"], bool)
+assert isinstance(doctor["fanotify_api_errno"], int)
+assert doctor["fanotify_api_errno"] >= 0
+assert doctor["fanotify_mount_mark"] == "not_run_requires_disposable_privileged_vm"
+assert doctor["config_bpf_lsm"] in {"enabled", "disabled", "unknown"}
+assert isinstance(doctor["active_lsm_bpf"], bool)
+assert isinstance(doctor["kernel_btf_available"], bool)
+assert isinstance(doctor["bpftool_available"], bool)
+assert doctor["bpf_lsm_preflight"] in {"ready", "incomplete"}
+assert doctor["bpf_hook_probe"] == "not_run_no_hook_selected"
+assert doctor["enforcement"] == "unsupported in this build"
+PY
 "$bin" status --policy "$tmp/policy.yaml" >"$tmp/status.json"
 python3 - "$tmp/status.json" <<'PY'
 import json, sys

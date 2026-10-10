@@ -13,7 +13,7 @@
 - CLI 회귀: audit duration에 음수, 문자가 섞인 값, 정수 초과 값을 주면 fanotify를 열기 전에 `PDG_INVALID_ARGUMENT`를 반환.
 - Draft 2020-12 JSON Schema 자체가 유효하고, 실제 `policy explain` 결과가 schema를 통과. CTest에서도 필수 키, `coverage` enum, `reason_code`, unknown actor, null errno, 따옴표가 포함된 경로 escape를 확인.
 - 메타데이터 단위 테스트: 짧은 버퍼, 버전/길이 불일치, 잘못된 예약 필드와 주요 이벤트 마스크 분류를 확인.
-- `doctor --json`: 이 호스트에서 fanotify group 생성은 불가능(종료 코드 3), BPF LSM은 활성 목록에 나타났습니다. 이는 개별 fanotify mount mark나 BPF hook을 검증하지 않습니다.
+- `doctor --json`: CTest가 fanotify errno, BPF 상태 필드의 타입/열거값, 미실행 hook probe, unsupported enforcement 계약을 검사합니다. 이 호스트에서는 group 생성 실패와 errno `EPERM`(종료 코드 3), `CONFIG_BPF_LSM=enabled`, active LSM의 `bpf` token, kernel BTF present, `bpftool` absent, preflight `incomplete`, probe `not_run_no_hook_selected`를 관찰했습니다. 이는 fanotify mount mark나 BPF hook attach를 검증하지 않습니다.
 
 실행하지 않은 검증: 실제 fanotify 이벤트 수집과 mount mark, 큐 오버플로 주입, 로그 디스크 오류, 보호 경로 밖 100개 workload, symlink/hardlink/bind mount 및 namespace 격리, BPF hook preflight/attach, privileged VM 테스트, parser fuzzing, 성능(P50/P95/P99·CPU·RSS). 권한이 필요한 항목은 SRS의 VM 격리 조건에 따라 이 호스트에서 실행하지 않았습니다.
 
@@ -32,7 +32,7 @@ Unprivileged policy processing and metadata validation tests ran on the current 
 - CLI regressions reject negative, mixed-character, and overflowing audit durations with `PDG_INVALID_ARGUMENT` before opening fanotify.
 - The Draft 2020-12 JSON Schema is valid, and an actual `policy explain` result passes it. CTest also checks required fields, coverage enum, reason code, unknown actor, null errno, and escaping of a quoted path.
 - Metadata unit tests cover short buffers, version/length mismatches, invalid reserved fields, and key event-mask classifications.
-- `doctor --json`: fanotify group creation was unavailable on this host (exit 3); BPF LSM appeared in the active list. This does not verify a particular fanotify mount mark or BPF hook.
+- `doctor --json`: CTest checks the fanotify errno, BPF-state field types/enums, no-hook-probe state, and unsupported-enforcement contract. This host reported group-creation failure `EPERM` (exit 3), `CONFIG_BPF_LSM=enabled`, active `bpf` LSM, kernel BTF present, bpftool absent, preflight `incomplete`, and probe `not_run_no_hook_selected`. This does not verify a fanotify mount mark or BPF hook attachment.
 
 Not run: live fanotify events and mount marks, queue-overflow injection, log disk errors, 100 out-of-scope workloads, symlink/hardlink/bind-mount and namespace isolation, BPF hook preflight/attach, privileged VM tests, parser fuzzing, or P50/P95/P99/CPU/RSS measurements. Privileged cases were not run on this host under the SRS disposable-VM requirement.
 

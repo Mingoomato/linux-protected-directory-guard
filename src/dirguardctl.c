@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -585,18 +586,91 @@ static int cmd_audit(const struct policy *p, const char *root_arg, const char *e
     return audit_rc;
 }
 
+static int bpf_lsm_config_enabled(void) {
+    struct utsname kernel;
+    if (uname(&kernel) != 0) return -1;
+    char config_path[PATH_MAX];
+    int written = snprintf(config_path, sizeof(config_path), "/boot/config-%s", kernel.release);
+    if (written < 0 || (size_t)written >= sizeof(config_path)) return -1;
+    FILE *config = fopen(config_path, "r");
+    if (!config) return -1;
+    char line[256];
+    int enabled = -1;
+    while (fgets(line, sizeof(line), config)) {
+        size_t length = strlen(line);
+        while (length && (line[length - 1U] == '\n' || line[length - 1U] == '\r'))
+            line[--length] = '\0';
+        if (!strcmp(line, "CONFIG_BPF_LSM=y")) { enabled = 1; break; }
+        if (!strcmp(line, "# CONFIG_BPF_LSM is not set")) { enabled = 0; break; }
+    }
+    fclose(config);
+    return enabled;
+}
+
+static int executable_on_path(const char *name) {
+    const char *path = getenv("PATH");
+    if (!path || !*path || !name || !*name) return 0;
+    const char *segment = path;
+    while (true) {
+        const char *separator = strchr(segment, ':');
+        size_t directory_length = separator ? (size_t)(separator - segment) : strlen(segment);
+        char candidate[PATH_MAX];
+        int written;
+        if (directory_length > sizeof(candidate) - strlen(name) - 2U) {
+            if (!separator) break;
+            segment = separator + 1;
+            continue;
+        }
+        if (!directory_length)
+            written = snprintf(candidate, sizeof(candidate), "%s", name);
+        else
+            written = snprintf(candidate, sizeof(candidate), "%.*s/%s",
+                               (int)directory_length, segment, name);
+        if (written >= 0 && (size_t)written < sizeof(candidate) && access(candidate, X_OK) == 0)
+            return 1;
+        if (!separator) break;
+        segment = separator + 1;
+    }
+    return 0;
+}
+
+static int active_bpf_lsm(char *lsm, size_t capacity) {
+    FILE *f = fopen("/sys/kernel/security/lsm", "r");
+    if (!f) return 0;
+    size_t count = fread(lsm, 1U, capacity - 1U, f);
+    fclose(f);
+    lsm[count] = '\0';
+    char *save = NULL;
+    for (char *name = strtok_r(lsm, ",\r\n", &save); name;
+         name = strtok_r(NULL, ",\r\n", &save)) {
+        if (!strcmp(name, "bpf")) return 1;
+    }
+    return 0;
+}
+
 static int cmd_doctor(void) {
     int fan = fanotify_init(FAN_CLOEXEC | FAN_CLASS_NOTIF | FAN_NONBLOCK,
                             O_RDONLY | O_CLOEXEC);
     bool available = fan >= 0;
+    int fan_errno = available ? 0 : errno;
     if (fan >= 0) close(fan);
-    FILE *f = fopen("/sys/kernel/security/lsm", "r");
     char lsm[2048] = "";
-    if (f) { (void)fread(lsm, 1, sizeof(lsm)-1U, f); fclose(f); }
-    bool bpf_lsm = strstr(lsm, "bpf") != NULL;
-    printf("{\"fanotify_api_available\":%s,\"fanotify_mount_mark\":\"requires privileged probe\","
-           "\"bpf_lsm_active\":%s,\"enforcement\":\"unsupported in this build\"}\n",
-           available ? "true" : "false", bpf_lsm ? "true" : "false");
+    bool bpf_lsm = active_bpf_lsm(lsm, sizeof(lsm)) != 0;
+    int bpf_config = bpf_lsm_config_enabled();
+    bool btf_available = access("/sys/kernel/btf/vmlinux", R_OK) == 0;
+    bool bpftool_available = executable_on_path("bpftool") != 0;
+    bool preflight_ready = bpf_config == 1 && bpf_lsm && btf_available && bpftool_available;
+    const char *config_status = bpf_config == 1 ? "enabled" :
+                                bpf_config == 0 ? "disabled" : "unknown";
+    printf("{\"fanotify_api_available\":%s,\"fanotify_api_errno\":%d,"
+           "\"fanotify_mount_mark\":\"not_run_requires_disposable_privileged_vm\","
+           "\"active_lsm_bpf\":%s,\"config_bpf_lsm\":\"%s\","
+           "\"kernel_btf_available\":%s,\"bpftool_available\":%s,"
+           "\"bpf_lsm_preflight\":\"%s\",\"bpf_hook_probe\":\"not_run_no_hook_selected\","
+           "\"enforcement\":\"unsupported in this build\"}\n",
+           available ? "true" : "false", fan_errno, bpf_lsm ? "true" : "false",
+           config_status, btf_available ? "true" : "false",
+           bpftool_available ? "true" : "false", preflight_ready ? "ready" : "incomplete");
     return available ? 0 : 3;
 }
 

@@ -17,7 +17,7 @@ The current branch is a verified unprivileged audit-only checkpoint, not full SR
 | PDG-FR-011 | Subject `any` only; no recursion/exception controls | Recursive self-event and exception behavior not implemented | NOT_STARTED |
 | PDG-FR-012 | Policy parsed into a candidate object before command use; no live reload | No reload/swap or rollback path exists | NOT_STARTED |
 | PDG-FR-013 | Overflow gap record; read/poll/write/path failures return degraded status | Metadata structural tests pass; live fault injection pending | IN_PROGRESS |
-| PDG-FR-014 | Active LSM name reported by `doctor` | Local LSM list observed; CONFIG/BTF/tooling preflight missing | IN_PROGRESS |
+| PDG-FR-014 | `cmd_doctor` reports active LSM, `CONFIG_BPF_LSM`, kernel BTF, `bpftool` availability, preflight result, and whether a hook probe ran | `tests/smoke.sh` validates output types/enums; current host reported config enabled, BPF LSM active, BTF present, bpftool absent, preflight incomplete; hook probe explicitly not run because none selected | IMPLEMENTED_DIAGNOSTIC_PREFLIGHT_ONLY |
 | PDG-FR-015 | Fanotify/BPF supported-operation matrix | `docs/HOOK_COVERAGE.md`; privileged positive/negative cases pending | IN_PROGRESS |
 | PDG-FR-016 | Audit path filters event paths to exact root | No 100-workload outside-scope negative gate run | IN_PROGRESS |
 | PDG-FR-017 | Unknown audit decision, PID source, errno, hook, policy identity | Explain contract tested; actual journal unavailable | IN_PROGRESS |

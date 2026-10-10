@@ -20,7 +20,7 @@ mkdir -p "$HOME/guard-lab"
 
 YAML 파서는 plain scalar, 보호 root 목록, 단순 규칙만 지원합니다. 따옴표 scalar, alias/tag, `subject:any` 이외의 주체, 정책 hot reload는 지원하지 않습니다. audit는 fanotify 권한과 mount mark 지원이 필요하며, 실패하면 `coverage=unsupported`를 명시합니다.
 
-Linux 전용 학습 프로젝트입니다. `CONFIG_FANOTIFY`가 활성화된 커널과 mount 표시 권한이 있어야 audit 이벤트를 받을 수 있으며, 특정 배포판/파일시스템의 hook 동작은 보장하지 않습니다. `doctor`는 기본 group 생성과 active LSM 목록만 확인합니다.
+Linux 전용 학습 프로젝트입니다. `CONFIG_FANOTIFY`가 활성화된 커널과 mount 표시 권한이 있어야 audit 이벤트를 받을 수 있으며, 특정 배포판/파일시스템의 hook 동작은 보장하지 않습니다. `doctor`는 fanotify group 생성을 시도하고 active LSM, `CONFIG_BPF_LSM`, kernel BTF, `bpftool` 유무를 기록합니다. 현재 저장소는 BPF program을 load하지 않으며 hook probe도 수행하지 않습니다.
 
 지원되지 않는 집행 결과 예시:
 
@@ -50,7 +50,7 @@ dirguardctl validates a narrow YAML policy subset, explains policy choices, prob
 
 ## Supported environment and example result
 
-This is a Linux-only educational project. Live audit needs a kernel with `CONFIG_FANOTIFY` and permission to mark the containing mount. No specific distribution/filesystem hook behavior is guaranteed. `doctor` checks only basic group creation and the active LSM list.
+This is a Linux-only educational project. Live audit needs a kernel with `CONFIG_FANOTIFY` and permission to mark the containing mount. No specific distribution/filesystem hook behavior is guaranteed. `doctor` attempts basic group creation and reports the active LSM, `CONFIG_BPF_LSM`, kernel BTF, and `bpftool` availability. This repository does not load a BPF program or run a hook probe.
 
 Example unsupported enforcement result:
 
