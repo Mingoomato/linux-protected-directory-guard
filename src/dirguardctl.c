@@ -619,17 +619,35 @@ static int cmd_audit(struct policy *p, const char *policy_file, const char *root
                         failure_errno = metadata_error;
                         stopping = 1; break;
                     }
+                    const char *observed_event = event_operation(meta->mask);
+                    const char *policy_operation = NULL;
+                    const char *decision = "unknown";
+                    const char *reason_code = "OPEN_ACCESS_MODE_UNOBSERVABLE";
+                    const char *policy_evaluation = "not_evaluated";
+                    char policy_action[16], policy_rule_id[128];
+                    if (meta->mask & FAN_CLOSE_WRITE) {
+                        policy_operation = "open_for_write";
+                        (void)evaluate(p, resolved, policy_operation,
+                                       policy_action, policy_rule_id);
+                        decision = policy_action;
+                        reason_code = policy_rule_id[0] ? policy_rule_id : "DEFAULT_ACTION";
+                        policy_evaluation = "post_event_observation";
+                    }
                     char line[PATH_MAX * 6U + 1024U];
                     int len = snprintf(line, sizeof(line),
                         "{\"schema_version\":\"guard_decision.v1\",\"id\":\"pdg-%s-%" PRIu64 "\","
                         "\"policy_id\":\"%s\",\"policy_revision\":\"%s\","
-                        "\"operation\":\"%s\",\"source_api\":\"fanotify\","
-                        "\"decision\":\"unknown\",\"reason_code\":\"AUDIT_ONLY\",\"enforced\":false,\"hook_verified\":true,"
+                        "\"operation\":\"%s\",\"observed_event\":\"%s\","
+                        "\"policy_operation\":%s,\"policy_evaluation\":\"%s\","
+                        "\"source_api\":\"fanotify\",\"decision\":\"%s\","
+                        "\"reason_code\":\"%s\",\"enforced\":false,\"hook_verified\":true,"
                         "\"scope_identity\":{\"path\":\"%s\",\"device_major\":%u,\"device_minor\":%u,\"inode\":%ju,\"file_identity_source\":\"fstat_event_fd\"},"
                         "\"actor_attribution\":\"%s\",\"pid_source\":\"%s\","
                         "\"pid\":%d,\"errno\":null,\"event_mask\":%llu,\"coverage\":\"audit_only\"}\n",
                         p->revision, ++event_sequence, p->revision, p->revision,
-                        event_operation(meta->mask), escaped,
+                        observed_event, observed_event,
+                        policy_operation ? "\"open_for_write\"" : "null",
+                        policy_evaluation, decision, reason_code, escaped,
                         major(event_stat.st_dev), minor(event_stat.st_dev), (uintmax_t)event_stat.st_ino,
                         meta->pid > 0 ? "process_pid_observed" : "unknown",
                         meta->pid > 0 ? "fanotify_event_metadata.pid" : "unknown",

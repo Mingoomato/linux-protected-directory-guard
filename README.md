@@ -22,6 +22,8 @@ YAML 파서는 plain scalar, 보호 root 목록, 단순 규칙만 지원합니�
 
 Linux 전용 학습 프로젝트입니다. `CONFIG_FANOTIFY`가 활성화된 커널과 mount 표시 권한이 있어야 audit 이벤트를 받을 수 있으며, 특정 배포판/파일시스템의 hook 동작은 보장하지 않습니다. `doctor`는 fanotify group 생성을 시도하고 active LSM, `CONFIG_BPF_LSM`, kernel BTF, `bpftool` 유무를 기록합니다. 현재 저장소는 BPF program을 load하지 않으며 hook probe도 수행하지 않습니다.
 
+이벤트에서 `FAN_CLOSE_WRITE`가 확인되면 이미 끝난 쓰기를 대상으로 `open_for_write` 정책을 평가해 선택된 allow/deny와 규칙 근거를 사후 기록합니다. `FAN_OPEN`은 접근 모드를 신뢰성 있게 알려 주지 않으므로 policy decision은 `unknown`입니다. 두 경우 모두 `enforced:false`이며 파일 접근을 막았다는 뜻은 아닙니다. 새 사후 평가 경로는 구현됐으나 아직 기술 검증을 하지 않았습니다.
+
 지원되지 않는 집행 결과 예시:
 
 ```json
@@ -72,7 +74,7 @@ GCC Release CTest passed 3/3, Clang Release passed 3/3, Clang ASan/UBSan passed 
 
 ## Supported environment and example result
 
-This is a Linux-only educational project. Live audit needs a kernel with `CONFIG_FANOTIFY` and permission to mark the containing mount. No specific distribution/filesystem hook behavior is guaranteed. `doctor` attempts basic group creation and reports the active LSM, `CONFIG_BPF_LSM`, kernel BTF, and `bpftool` availability. This repository does not load a BPF program or run a hook probe.
+This is a Linux-only educational project. Live audit needs a kernel with `CONFIG_FANOTIFY` and permission to mark the containing mount. No specific distribution/filesystem hook behavior is guaranteed. `doctor` attempts basic group creation and reports the active LSM, `CONFIG_BPF_LSM`, kernel BTF, and `bpftool` availability. This repository does not load a BPF program or run a hook probe. A `FAN_CLOSE_WRITE` event now triggers a retrospective `open_for_write` policy evaluation and records the selected allow/deny action and reason with `enforced:false`. `FAN_OPEN` does not reveal a trustworthy access mode, so its policy decision stays unknown. This new code has not been technically verified.
 
 Example unsupported enforcement result:
 
@@ -89,13 +91,13 @@ Create an owned lab directory, copy configs/lab-policy.yaml, and replace its exa
 
 Audit requires a kernel with fanotify and permission to mark the containing mount. It logs only paths beneath the selected protected root, even though FAN_MARK_MOUNT observes a wider mount. If capability probing or mount marking fails, the command returns an explicit unsupported/error state. It does not issue permission events.
 
-The duration must be a non-negative integer. JSONL records distinguish the resolved path from event-FD device/inode identity and label the PID with its fanotify metadata source. The journal's own `(device,inode)` identity is filtered to prevent its open event from feeding back into its own records; the live fanotify path has not been exercised here. Queue overflow or metadata, path, read, poll, or journal failures stop the monitor with a degraded result. The journal must be an owned regular file; its permissions are restricted to `0600`.
+The duration must be a non-negative integer. JSONL records distinguish the resolved path from event-FD device/inode identity and label the PID with its fanotify metadata source. `FAN_CLOSE_WRITE` policy results are retrospective and never imply a blocked write; `FAN_OPEN` is unknown because the access mode is unavailable. The journal's own `(device,inode)` identity is filtered to prevent its open event from feeding back into its own records; the live fanotify path has not been exercised here. Queue overflow or metadata, path, read, poll, or journal failures stop the monitor with a degraded result. The journal must be an owned regular file; its permissions are restricted to `0600`.
 
 While audit is running, `SIGHUP` asks it to parse and validate a candidate policy, require the same protected-root set and a new revision, dry-run the supported operation catalog, and swap at the event-loop boundary. A failed candidate leaves the active revision intact. The transaction helper is unit-tested; the privileged signal/event-loop path remains unverified.
 
 ## Guarantee boundary
 
-Audit observes selected open/close notifications and cannot block writes, rename, unlink, mmap, kernel internal I/O, or remote changes. Enforce always returns PDG_UNSUPPORTED_ENFORCEMENT; enforced=false is never represented as a denial. BPF LSM is probed for diagnostics only and no BPF program is loaded. Run privileged experiments only in a disposable VM with a recovery console.
+Audit observes selected open/close notifications and cannot block writes, rename, unlink, mmap, kernel internal I/O, or remote changes. A `deny` on `FAN_CLOSE_WRITE` is a retrospective policy result after the write; `enforced:false` explicitly means it was not blocked. Enforce always returns PDG_UNSUPPORTED_ENFORCEMENT. BPF LSM is probed for diagnostics only and no BPF program is loaded. Run privileged experiments only in a disposable VM with a recovery console.
 
 Recovery: this build installs no persistent hook. Stop a foreground audit with `Ctrl-C`. If a disposable VM experiment leaves an unexpected state, revert the hypervisor snapshot taken before the experiment. Prepare the snapshot and recovery console before testing.
 

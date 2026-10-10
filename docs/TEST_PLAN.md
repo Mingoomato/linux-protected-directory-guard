@@ -13,6 +13,7 @@
 - Clang libFuzzer를 임시 corpus directory에서 실행해 bounded policy parser crash/UB를 탐색.
 - SIGHUP candidate reload helper에서 새 revision 적용, malformed candidate, root 변경, 중복 revision의 active-state rollback 확인.
 - journal self-event identity comparator의 device/inode 경계 확인.
+- 미실행 회귀 게이트: 격리 VM에서 `FAN_CLOSE_WRITE`의 allow/deny 규칙 및 default action 사후 평가를 확인하고, journal에 `policy_operation=open_for_write`, `policy_evaluation=post_event_observation`, `enforced=false`가 기록되는지 확인. 같은 파일의 `FAN_OPEN`은 접근 모드를 모르는 `unknown`/`not_evaluated`여야 함.
 
 ### 격리된 VM에서만 실행할 게이트
 
@@ -42,6 +43,7 @@
 - Run Clang libFuzzer against a temporary corpus directory to explore parser crashes and undefined behavior.
 - Verify reload-transaction behavior for new revisions, malformed candidates, root changes, duplicate revisions, and active-state rollback.
 - Check the journal self-event identity comparator's device/inode boundaries.
+- Planned, not run: in a disposable VM, observe `FAN_CLOSE_WRITE` under allow and deny rules and the default action; confirm the journal records `policy_operation=open_for_write`, `policy_evaluation=post_event_observation`, and `enforced:false` after the write has completed. Confirm the corresponding `FAN_OPEN` remains `unknown`/`not_evaluated` because its access mode is unavailable.
 
 ### Disposable-VM-only gates
 
@@ -56,4 +58,4 @@
 
 ### Current status
 
-GCC/Clang Release and Clang ASan/UBSan builds/CTest, a 2,000-run seeded libFuzzer smoke, reload-transaction unit test, 100 synthetic out-of-root CLI rejections, and static analysis passed. The `doctor` JSON contract is tested; the current host's BPF preflight is incomplete because bpftool is absent. Live privileged fanotify/SIGHUP behavior, sustained fuzzing/coverage, event fault injection, scope isolation, and performance gates have not run. No hook was selected, so hook probing did not run. See `docs/TEST_RESULTS.md`.
+Earlier GCC/Clang Release and Clang ASan/UBSan builds/CTest, a 2,000-run seeded libFuzzer smoke, reload-transaction unit test, 100 synthetic out-of-root CLI rejections, and static analysis passed before the latest source change. The `doctor` JSON contract is tested; the current host's BPF preflight is incomplete because bpftool is absent. The new retrospective close-write policy-evaluation code and schema additions have not been verified. Live privileged fanotify/SIGHUP behavior, sustained fuzzing/coverage, event fault injection, scope isolation, and performance gates have not run. No hook was selected, so hook probing did not run. See `docs/TEST_RESULTS.md`.

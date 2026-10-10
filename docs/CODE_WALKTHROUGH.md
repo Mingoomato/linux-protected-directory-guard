@@ -19,7 +19,7 @@
 3. 로그 파일은 `O_NOFOLLOW|O_APPEND|O_NONBLOCK`로 열고 `fstat`으로 현재 UID 소유 regular file인지 확인합니다. mode를 `0600`으로 낮춥니다.
 4. `poll`로 기다렸다가 `read`한 byte buffer를 metadata record로 순회합니다. 각 record는 버전, reserved 필드, `event_len`, `metadata_len`, 남은 buffer 길이를 검사합니다. 구조 검증은 `src/fanotify_records.h`의 `metadata_record_valid`가 담당합니다.
 5. event FD를 `/proc/self/fd/N`으로 `readlink`해 path를 얻고 보호 root 밑인지 확인합니다. `fstat(event_fd)`로 device major/minor와 inode를 따로 읽습니다. PID는 metadata 출처를 함께 기록합니다. 이 값들은 경로 문자열과 동일한 개념이 아닙니다.
-6. JSON line은 길이 제한된 buffer에서 생성하고 `write_all`은 부분 write와 `EINTR`를 처리합니다. 파일이 아닌 event, queue overflow, metadata/path/read/poll/log 오류는 명시적으로 degraded 종료합니다. 정상 duration 또는 signal 종료도 journal에 남깁니다.
+6. `FAN_CLOSE_WRITE`는 `open_for_write` policy를 event 이후 평가해 rule/default action을 `decision`과 `reason_code`에 기록합니다. 이것은 이미 끝난 write를 되돌리거나 막지 않는 사후 판단입니다. `FAN_OPEN`은 접근 모드를 알 수 없으므로 `unknown` 및 `OPEN_ACCESS_MODE_UNOBSERVABLE`로 남깁니다. JSON line은 길이 제한된 buffer에서 생성하고 `write_all`은 부분 write와 `EINTR`를 처리합니다. 파일이 아닌 event, queue overflow, metadata/path/read/poll/log 오류는 명시적으로 degraded 종료합니다. 정상 duration 또는 signal 종료도 journal에 남깁니다.
 7. 각 정상 event FD와 group/log FD를 `close`합니다. 이 빌드에서 permission response를 보내거나 deny를 실행하지 않습니다.
 
 ### 4. Capability 진단 및 안전 명령
@@ -62,7 +62,7 @@ The requested path is canonicalized and checked against a protected root and ope
 
 The command requires an exact protected root, creates a `FAN_CLASS_NOTIF` group, then marks the containing mount for `FAN_OPEN` and `FAN_CLOSE_WRITE`. It opens an append-only no-follow journal, checks that it is an owned regular file, and restricts permissions to `0600`.
 
-The loop waits with `poll`, reads a byte buffer, validates metadata version/reserved fields/event length/metadata length against the remaining bytes, and resolves event FDs through `/proc/self/fd/N`. It filters the resolved path to the exact configured root and records `fstat` device major/minor and inode separately. A supplied PID is labeled by its metadata source. JSON output uses bounded buffers and `write_all` handles short writes and `EINTR`.
+The loop waits with `poll`, reads a byte buffer, validates metadata version/reserved fields/event length/metadata length against the remaining bytes, and resolves event FDs through `/proc/self/fd/N`. It filters the resolved path to the exact configured root and records `fstat` device major/minor and inode separately. A supplied PID is labeled by its metadata source. For `FAN_CLOSE_WRITE`, `evaluate` selects the `open_for_write` rule/default action after the write has completed; JSON records that retrospective decision and `enforced:false`. For `FAN_OPEN`, the access mode is not trustworthy, so the record remains unknown with `OPEN_ACCESS_MODE_UNOBSERVABLE`. JSON output uses bounded buffers and `write_all` handles short writes and `EINTR`.
 
 Queue overflow, malformed records, missing event FDs, path/read/poll/journal failures produce a degraded nonzero exit. Normal duration/signal stops are journaled. Every valid event FD and both owned group/log descriptors are closed. No permission response is ever sent.
 

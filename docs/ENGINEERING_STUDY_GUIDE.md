@@ -4,7 +4,7 @@
 
 ### 학습 목표와 상태
 
-이 프로젝트는 좁은 정책 언어를 안전하게 파싱하고, 규칙을 설명하며, fanotify 알림을 차단과 혼동하지 않고 기록하는 과정을 학습합니다. 현재 구현은 audit-only 부분 구현입니다. GCC Release, Clang Release 및 Clang ASan/UBSan CTest가 각각 3/3 통과했고, Clang libFuzzer + ASan/UBSan CTest는 4/4 통과했습니다. parser fuzz smoke는 seeded 입력으로 2,000회 실행했고, reload rollback과 100개의 synthetic out-of-root CLI 요청을 검사했습니다. 이것들은 실제 fanotify workload 검증은 아닙니다. 정적 분석과 비특권 정책 회귀도 통과했습니다. `doctor`는 BPF 설정·활성 LSM·BTF·bpftool 상태를 보고하며, 현재 호스트의 사전 점검은 bpftool 부재로 incomplete입니다. 실제 fanotify mount mark·실이벤트, self-event suppression, SIGHUP reload loop, queue overflow, privileged VM, BPF hook 및 성능 게이트는 미검증입니다. 자동 테스트 통과는 SRS 전체 구현이나 학습자의 개인 숙련 증거가 아닙니다.
+이 프로젝트는 좁은 정책 언어를 안전하게 파싱하고, 규칙을 설명하며, fanotify 알림을 차단과 혼동하지 않고 기록하는 과정을 학습합니다. 현재 구현은 audit-only 부분 구현입니다. GCC Release, Clang Release 및 Clang ASan/UBSan CTest가 각각 3/3 통과했고, Clang libFuzzer + ASan/UBSan CTest는 4/4 통과했습니다. parser fuzz smoke는 seeded 입력으로 2,000회 실행했고, reload rollback과 100개의 synthetic out-of-root CLI 요청을 검사했습니다. 이것들은 실제 fanotify workload 검증은 아닙니다. 정적 분석과 비특권 정책 회귀도 통과했습니다. `doctor`는 BPF 설정·활성 LSM·BTF·bpftool 상태를 보고하며, 현재 호스트의 사전 점검은 bpftool 부재로 incomplete입니다. `FAN_CLOSE_WRITE`의 사후 policy evaluation은 추가됐지만 이번 변경은 아직 검증하지 않았습니다. 실제 fanotify mount mark·실이벤트, self-event suppression, SIGHUP reload loop, queue overflow, privileged VM, BPF hook 및 성능 게이트는 미검증입니다. 자동 테스트 통과는 SRS 전체 구현이나 학습자의 개인 숙련 증거가 아닙니다.
 
 ### 중요한 하위 시스템이 존재하는 이유
 
@@ -28,11 +28,12 @@
 4. `policy explain`은 입력 경로와 operation을 검사하고 정책 결과를 `guard_decision.v1` JSON으로 씁니다. `enforced:false`, `hook_verified:false`, `coverage:audit_only`가 이 결과가 설명에 불과함을 나타냅니다.
 5. `audit`는 선택 root가 policy root와 정확히 일치하는지 확인한 뒤 `fanotify_init(FAN_CLASS_NOTIF)`와 `fanotify_mark(FAN_MARK_MOUNT)`를 호출합니다. mount mark가 더 넓을 수 있어 event FD의 `/proc/self/fd/N` 경로를 root 아래인지 필터링합니다.
 6. metadata version/length를 검증하고, event FD에서 `fstat`한 device major/minor와 inode를 pathname과 별도로 기록합니다. 제공된 PID는 `fanotify_event_metadata.pid` 출처와 함께 기록하고 검증된 장기 프로세스 신원으로 취급하지 않습니다.
-7. event FD와 log FD는 모든 정상/오류 경로에서 닫습니다. queue overflow, metadata 오류, path/read/poll/write 실패는 coverage gap/degraded로 처리하고 0이 아닌 종료를 반환합니다. 종료 신호나 지정 시간이 끝나면 종료 이유를 기록합니다.
-8. `enforce`는 항상 `PDG_UNSUPPORTED_ENFORCEMENT`를 반환합니다. BPF LSM은 진단만 하며 program을 load하지 않습니다.
-9. `doctor`는 `fanotify_init` 결과와 errno를 기록하고, `/boot/config-<release>`에서 `CONFIG_BPF_LSM`, `/sys/kernel/security/lsm`에서 정확한 active LSM token, `/sys/kernel/btf/vmlinux`, `PATH`의 실행 가능한 `bpftool`을 확인합니다. hook을 선택하지 않았으므로 `bpf_hook_probe=not_run_no_hook_selected`입니다.
-10. `PDG_ENABLE_FUZZING=ON`이면 Clang libFuzzer target이 같은 production parser translation unit을 ASan/UBSan으로 빌드합니다. 고정 corpus의 `@ROOT@`는 실행 중 생성한 canonical 임시 경로로 치환되고, 각 입력은 제한된 임시 파일을 거쳐 `parse_policy`에 전달됩니다. CTest smoke는 2,000개 입력을 실행합니다. 100개의 별도 synthetic 경로 테스트는 `policy explain`의 root 바깥 거부만 검사합니다.
-11. audit 중 SIGHUP은 flag만 설정합니다. 단일 event loop가 다음 경계에서 policy file을 candidate struct로 파싱하고, 보호 root가 그대로인지·revision이 새 값인지 확인한 뒤 operation 목록을 dry-run합니다. 통과하면 전체 `struct policy`를 교체하고, 실패하면 기존 객체를 보존합니다. journal과 동일한 `(st_dev, st_ino)`인 event FD는 기록 전에 닫고 건너뜁니다.
+7. `FAN_CLOSE_WRITE`가 오면 `open_for_write` 정책을 사후 평가해 선택된 규칙/default action을 기록합니다. 이미 쓰기가 끝난 뒤이므로 이는 차단 결과가 아니며 항상 `enforced=false`입니다. `FAN_OPEN`은 접근 모드를 알 수 없어 `unknown`으로 기록합니다.
+8. event FD와 log FD는 모든 정상/오류 경로에서 닫습니다. queue overflow, metadata 오류, path/read/poll/write 실패는 coverage gap/degraded로 처리하고 0이 아닌 종료를 반환합니다. 종료 신호나 지정 시간이 끝나면 종료 이유를 기록합니다.
+9. `enforce`는 항상 `PDG_UNSUPPORTED_ENFORCEMENT`를 반환합니다. BPF LSM은 진단만 하며 program을 load하지 않습니다.
+10. `doctor`는 `fanotify_init` 결과와 errno를 기록하고, `/boot/config-<release>`에서 `CONFIG_BPF_LSM`, `/sys/kernel/security/lsm`에서 정확한 active LSM token, `/sys/kernel/btf/vmlinux`, `PATH`의 실행 가능한 `bpftool`을 확인합니다. hook을 선택하지 않았으므로 `bpf_hook_probe=not_run_no_hook_selected`입니다.
+11. `PDG_ENABLE_FUZZING=ON`이면 Clang libFuzzer target이 같은 production parser translation unit을 ASan/UBSan으로 빌드합니다. 고정 corpus의 `@ROOT@`는 실행 중 생성한 canonical 임시 경로로 치환되고, 각 입력은 제한된 임시 파일을 거쳐 `parse_policy`에 전달됩니다. CTest smoke는 2,000개 입력을 실행합니다. 100개의 별도 synthetic 경로 테스트는 `policy explain`의 root 바깥 거부만 검사합니다.
+12. audit 중 SIGHUP은 flag만 설정합니다. 단일 event loop가 다음 경계에서 policy file을 candidate struct로 파싱하고, 보호 root가 그대로인지·revision이 새 값인지 확인한 뒤 operation 목록을 dry-run합니다. 통과하면 전체 `struct policy`를 교체하고, 실패하면 기존 객체를 보존합니다. journal과 동일한 `(st_dev, st_ino)`인 event FD는 기록 전에 닫고 건너뜁니다.
 
 ### Linux 인터페이스, 소유권 및 concurrency
 
@@ -67,7 +68,7 @@ This project teaches bounded policy parsing, deterministic explanation, and audi
 
 The policy parser uses a fixed-size `struct policy`, `open(O_NOFOLLOW)`, bounded line and total-input sizes, explicit fields, canonical roots, and conflict checks. `evaluate` chooses the most-specific valid same-action scope. `policy explain` returns a policy result with `enforced:false`, `hook_verified:false`, and `coverage:audit_only`.
 
-The observer creates a `FAN_CLASS_NOTIF` group, marks the containing mount, reads packed metadata, validates version and lengths against the available bytes, resolves each event FD through `/proc/self/fd`, and filters to the configured canonical root. `fstat` device major/minor and inode are recorded separately from the path. The PID field is labeled with its fanotify metadata source, not as a durable process identity. Permission responses are never sent.
+The observer creates a `FAN_CLASS_NOTIF` group, marks the containing mount, reads packed metadata, validates version and lengths against the available bytes, resolves each event FD through `/proc/self/fd`, and filters to the configured canonical root. `fstat` device major/minor and inode are recorded separately from the path. The PID field is labeled with its fanotify metadata source, not as a durable process identity. A `FAN_CLOSE_WRITE` record retrospectively evaluates `open_for_write` and stores the selected allow/deny rule or default action; the write has already happened and `enforced:false` means no access was blocked. `FAN_OPEN` does not reliably identify the access mode, so it remains `unknown` and is marked `not_evaluated`. Permission responses are never sent. This newly added policy-evaluation path and its schema fields have not been technically verified.
 
 With `PDG_ENABLE_FUZZING=ON`, Clang builds `tests/policy_parser_fuzz.c` with libFuzzer, ASan, and UBSan. It includes the same parser implementation as the CLI, expands a corpus root marker into a private temporary directory, and rewrites a bounded temporary regular file before each parse. The seeded CTest run makes 2,000 calls and looks for memory-safety failures and crashes. It does not prove that all malformed policies are rejected correctly. A separate fixed set of 100 synthetic out-of-root CLI paths tests the `policy explain` guard only; it does not execute processes under fanotify.
 

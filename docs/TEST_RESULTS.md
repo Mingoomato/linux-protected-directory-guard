@@ -4,6 +4,8 @@
 
 현재 호스트에서 비특권 정책 처리와 메타데이터 검사 단위 테스트를 실행했습니다. 이 결과는 SRS-03 전체 완료나 파일 접근 차단의 증거가 아닙니다.
 
+아래 실행 기록은 `FAN_CLOSE_WRITE` 사후 policy-evaluation 코드와 schema 필드를 추가하기 전에 생성되었습니다. 최신 코드 변경은 요청에 따라 재검증하지 않았으며, 새 경로는 미검증입니다.
+
 - GCC Release 구성·빌드: 통과.
 - Release CTest: 3/3 통과 (`policy-audit-smoke`, `fanotify-metadata-validation`, `policy-reload-transaction`).
 - Clang libFuzzer + ASan/UBSan 구성·빌드와 CTest: 4/4 통과. `policy-parser-fuzz-smoke`는 임시 corpus directory의 정상 seed에서 2,000회 변이 실행했습니다.
@@ -28,6 +30,8 @@
 
 Unprivileged policy processing and metadata validation tests ran on the current host. These results do not establish full SRS-03 completion or file-access blocking.
 
+The execution record below predates the addition of retrospective `FAN_CLOSE_WRITE` policy evaluation and its schema fields. The latest code change was not re-verified, as requested; that path remains unverified.
+
 - GCC Release configure/build: passed.
 - Release CTest: 3/3 passed (`policy-audit-smoke`, `fanotify-metadata-validation`, `policy-reload-transaction`).
 - Clang libFuzzer + ASan/UBSan configure/build and CTest: 4/4 passed. `policy-parser-fuzz-smoke` ran 2,000 mutations from a checked-in valid seed copied into a temporary corpus directory.
@@ -45,6 +49,6 @@ Unprivileged policy processing and metadata validation tests ran on the current 
 - Metadata unit tests cover short buffers, version/length mismatches, invalid reserved fields, and key event-mask classifications.
 - `doctor --json`: CTest checks the fanotify errno, BPF-state field types/enums, no-hook-probe state, and unsupported-enforcement contract. This host reported group-creation failure `EPERM` (exit 3), `CONFIG_BPF_LSM=enabled`, active `bpf` LSM, kernel BTF present, bpftool absent, preflight `incomplete`, and probe `not_run_no_hook_selected`. This does not verify a fanotify mount mark or BPF hook attachment.
 
-Not run: live fanotify events and mount marks, journal self-event suppression at runtime, SIGHUP reload loop and journal output, queue-overflow injection, log disk errors, 100 real out-of-scope workloads, symlink/hardlink/bind-mount and namespace isolation, BPF hook preflight/attach, privileged VM tests, sustained parser fuzzing/coverage analysis, or P50/P95/P99/CPU/RSS measurements. Privileged cases were not run on this host under the SRS disposable-VM requirement.
+Not run: the new close-write policy-evaluation and schema contract; live fanotify events and mount marks, journal self-event suppression at runtime, SIGHUP reload loop and journal output, queue-overflow injection, log disk errors, 100 real out-of-scope workloads, symlink/hardlink/bind-mount and namespace isolation, BPF hook preflight/attach, privileged VM tests, sustained parser fuzzing/coverage analysis, or P50/P95/P99/CPU/RSS measurements. Privileged cases were not run on this host under the SRS disposable-VM requirement.
 
 `enforce` always returns `PDG_UNSUPPORTED_ENFORCEMENT`. This is a partial audit-only implementation, not full SRS completion.

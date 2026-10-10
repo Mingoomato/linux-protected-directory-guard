@@ -1,6 +1,6 @@
 # Requirements Traceability — SRS-03
 
-The current branch is a verified unprivileged audit-only checkpoint, not full SRS completion. Code presence and unprivileged tests do not establish privileged hook behavior.
+The branch contains a previously verified unprivileged audit-only checkpoint plus a newer retrospective `FAN_CLOSE_WRITE` policy-evaluation change that has not been verified. It is not full SRS completion. Code presence and earlier unprivileged tests do not establish the new decision contract or privileged hook behavior.
 
 | Requirement | Source / artifact | Verification | Status |
 |---|---|---|---|
@@ -8,9 +8,9 @@ The current branch is a verified unprivileged audit-only checkpoint, not full SR
 | PDG-FR-002 | Audit default; explicit unsupported `enforce` | Smoke checks explain and enforce contract | IMPLEMENTED (audit only) |
 | PDG-FR-003 | Bounded policy subset, duplicate/unknown/conflict checks | Parser regressions plus 2,000 seeded Clang libFuzzer iterations under ASan/UBSan; sustained fuzzing and coverage review pending | IN_PROGRESS |
 | PDG-FR-004 | validate/explain/status/audit/enforce/disable commands | Smoke covers all except live audit | IN_PROGRESS |
-| PDG-FR-005 | fanotify PID or unknown attribution in journal | Live event capture unavailable on host | IN_PROGRESS |
+| PDG-FR-005 | fanotify PID or unknown attribution in journal | Live event capture unavailable on host; newly added close-write policy decision is also unverified | IN_PROGRESS |
 | PDG-FR-006 | path plus `st_dev` major/minor and inode from event FD | Code review; namespace, bind-mount and alias tests pending | IN_PROGRESS |
-| PDG-FR-007 | event ID, policy ID/revision, reason, hook and mode fields | Explain contract checked; live event contract untested | IN_PROGRESS |
+| PDG-FR-007 | event ID, policy ID/revision, reason, hook and mode fields | Prior explain contract checked; new `observed_event`, `policy_operation`, and `policy_evaluation` close-write fields and live journal remain unverified | IN_PROGRESS |
 | PDG-FR-008 | `doctor` basic group probe; audit mount mark errors explicit | Host group probe unavailable; supported filesystem/capability matrix missing | IN_PROGRESS |
 | PDG-FR-009 | Hook coverage limitations | `docs/HOOK_COVERAGE.md` | IMPLEMENTED (documentation) |
 | PDG-FR-010 | `PDG_UNSUPPORTED_ENFORCEMENT`, `coverage=unsupported` | Smoke test confirms explicit unsupported result | IMPLEMENTED |
@@ -20,7 +20,7 @@ The current branch is a verified unprivileged audit-only checkpoint, not full SR
 | PDG-FR-014 | `cmd_doctor` reports active LSM, `CONFIG_BPF_LSM`, kernel BTF, `bpftool` availability, preflight result, and whether a hook probe ran | `tests/smoke.sh` validates output types/enums; current host reported config enabled, BPF LSM active, BTF present, bpftool absent, preflight incomplete; hook probe explicitly not run because none selected | IMPLEMENTED_DIAGNOSTIC_PREFLIGHT_ONLY |
 | PDG-FR-015 | Fanotify/BPF supported-operation matrix | `docs/HOOK_COVERAGE.md`; privileged positive/negative cases pending | IN_PROGRESS |
 | PDG-FR-016 | Audit path filters event paths to exact root | 100 synthetic outside-root `policy explain` requests rejected; live event filtering and 100 real workload gate pending | IN_PROGRESS |
-| PDG-FR-017 | Unknown audit decision, PID source, errno, hook, policy identity | Explain contract tested; actual journal unavailable | IN_PROGRESS |
+| PDG-FR-017 | Unknown audit decision, PID source, errno, hook, policy identity | Prior explain contract tested; new retrospective close-write allow/deny and schema contract are unverified; actual journal unavailable | IN_PROGRESS |
 | PDG-FR-018 | mmap, kernel I/O, remote-change gaps | `docs/HOOK_COVERAGE.md` | IMPLEMENTED (documentation) |
 | PDG-FR-019 | Optional atomic hot reload and rollback | Audit-only SIGHUP reload transaction implemented; no kernel policy/map application exists | IMPLEMENTED_AUDIT_ONLY |
 | PDG-FR-020 | Input/event/log bounds and recovery procedure | Parser and duration bounds tested; latency and resource gates pending | IN_PROGRESS |
