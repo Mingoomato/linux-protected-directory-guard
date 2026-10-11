@@ -8,5 +8,6 @@
     "src/dirguardctl.c": "47a3d725bd8d9ba4c84aebd2f22c2bf30181b991ad3ea1b5a8fe204b0bd1f74b"
   },
   "owner_mastery": "unassessed",
-  "remote_ci": "new_workflow_pending_remote_run"
+  "remote_ci": "blocked_before_execution_account_billing_or_spending_limit",
+  "remote_ci_url": "https://github.com/Mingoomato/linux-protected-directory-guard/actions/runs/38107486578"
 }
