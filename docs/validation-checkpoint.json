@@ -1,0 +1,12 @@
+{
+  "date": "2026-10-11",
+  "environment": "Linux 7.1.5+kali-amd64 x86_64; GCC 16.2.0; CMake Release; Python 3.14.7",
+  "result": "3/3 CTest passed, 0.39 s.",
+  "scope": "Policy audit smoke, fanotify record structure and policy reload transaction tests.",
+  "remaining": "Live fanotify and namespace/fault gates require an appropriate disposable VM. Enforcement remains unsupported; audit is not prevention.",
+  "source_sha256": {
+    "src/dirguardctl.c": "47a3d725bd8d9ba4c84aebd2f22c2bf30181b991ad3ea1b5a8fe204b0bd1f74b"
+  },
+  "owner_mastery": "unassessed",
+  "remote_ci": "new_workflow_pending_remote_run"
+}

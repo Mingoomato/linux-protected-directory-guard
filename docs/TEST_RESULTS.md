@@ -1,5 +1,7 @@
 # Verification Results — Linux Protected Directory Guard
 
+> Latest / 최신: [2026-10-11 checkpoint](VALIDATION_CHECKPOINT.md). Earlier entries below describe their own historical revisions; they do not override this scoped checkpoint.
+
 ## 한국어
 
 현재 호스트에서 비특권 정책 처리와 메타데이터 검사 단위 테스트를 실행했습니다. 이 결과는 SRS-03 전체 완료나 파일 접근 차단의 증거가 아닙니다.

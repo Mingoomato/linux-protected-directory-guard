@@ -1,5 +1,7 @@
 # Requirements Traceability — SRS-03
 
+Latest scoped evidence: [2026-10-11 validation checkpoint](VALIDATION_CHECKPOINT.md). Historical pending/unverified rows below remain applicable to gates not exercised by that checkpoint.
+
 The branch contains a previously verified unprivileged audit-only checkpoint plus a newer retrospective `FAN_CLOSE_WRITE` policy-evaluation change that has not been verified. It is not full SRS completion. Code presence and earlier unprivileged tests do not establish the new decision contract or privileged hook behavior.
 
 | Requirement | Source / artifact | Verification | Status |
