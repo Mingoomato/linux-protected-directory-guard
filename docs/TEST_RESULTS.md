@@ -32,7 +32,7 @@
 
 Unprivileged policy processing and metadata validation tests ran on the current host. These results do not establish full SRS-03 completion or file-access blocking.
 
-The execution record below predates the addition of retrospective `FAN_CLOSE_WRITE` policy evaluation and its schema fields. The latest code change was not re-verified, as requested; that path remains unverified.
+The historical execution record below predates retrospective `FAN_CLOSE_WRITE` policy evaluation. The current source now passes GCC/Clang and Clang ASan/UBSan CTest; classification and deny-write policy logic are checked separately. The combined live fanotify journal/schema path remains unverified.
 
 - GCC Release configure/build: passed.
 - Release CTest: 3/3 passed (`policy-audit-smoke`, `fanotify-metadata-validation`, `policy-reload-transaction`).
