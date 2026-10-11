@@ -67,11 +67,17 @@ int main(void) {
     CHECK(write_policy_fixture(policy_path, root_one, "revision-one", "allow", 1) == 0);
     CHECK(parse_policy(policy_path, &active) == 0);
     CHECK(!strcmp(active.revision, "revision-one"));
+    char action[16], rule_id[128];
+    CHECK(evaluate(&active, root_one, "open_for_write", action, rule_id) == 0);
+    CHECK(!strcmp(action, "deny"));
+    CHECK(!strcmp(rule_id, "deny-writes"));
+    CHECK(evaluate(&active, root_one, "open_for_read", action, rule_id) == 0);
+    CHECK(!strcmp(action, "allow"));
+    CHECK(rule_id[0] == '\0');
 
     CHECK(write_policy_fixture(policy_path, root_one, "revision-two", "deny", 1) == 0);
     CHECK(reload_policy(&active, policy_path) == 0);
     CHECK(!strcmp(active.revision, "revision-two"));
-    char action[16], rule_id[128];
     CHECK(evaluate(&active, root_one, "open_for_read", action, rule_id) == 0);
     CHECK(!strcmp(action, "deny"));
 
