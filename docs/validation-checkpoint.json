@@ -5,9 +5,20 @@
   "scope": "Policy audit smoke, fanotify record structure and policy reload transaction tests.",
   "remaining": "Live fanotify and namespace/fault gates require an appropriate disposable VM. Enforcement remains unsupported; audit is not prevention.",
   "source_sha256": {
-    "src/dirguardctl.c": "47a3d725bd8d9ba4c84aebd2f22c2bf30181b991ad3ea1b5a8fe204b0bd1f74b"
+    "src/dirguardctl.c": "47a3d725bd8d9ba4c84aebd2f22c2bf30181b991ad3ea1b5a8fe204b0bd1f74b",
+    "tests/policy_reload_test.c": "4ba312796a160e869c5e52fac0af78ef6eca449881147f930edd7b6aac6314e9"
   },
   "owner_mastery": "unassessed",
   "remote_ci": "blocked_before_execution_account_billing_or_spending_limit",
-  "remote_ci_url": "https://github.com/Mingoomato/linux-protected-directory-guard/actions/runs/38107486578"
+  "remote_ci_url": "https://github.com/Mingoomato/linux-protected-directory-guard/actions/runs/38107486578",
+  "local_followup": {
+    "date": "2026-10-11",
+    "host": "Kali Linux 7.1.5+kali-amd64 x86_64",
+    "gcc_release_ctest": "3/3 pass",
+    "clang_release_ctest": "3/3 pass",
+    "clang_asan_ubsan": "3/3 CTest pass",
+    "fuzz_smoke_requested_runs": 20000,
+    "kernel_module_compile": "not_applicable",
+    "full_srs_status": "pending"
+  }
 }
